@@ -7,13 +7,14 @@ name = "senda"
 dynamic = ["version"]
 description = "Modular Python framework for enzyme QM/MM free energy calculations."
 requires-python = ">=3.9"
-dependencies = ["pyyaml", "numpy"]
+dependencies = ["pyyaml", "numpy", "biopython"]
 
 [project.optional-dependencies]
 rdkit = ["rdkit"]
 
 [project.scripts]
-senda-param = "senda.ligand_parameters.run:main"
+senda-param   = "senda.ligand_parameters.run:main"
+senda-complex = "senda.michaelis_complex.run:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "senda.__version__"}

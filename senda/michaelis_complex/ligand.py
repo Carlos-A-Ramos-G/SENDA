@@ -1,0 +1,67 @@
+"""
+senda.michaelis_complex.ligand
+Ligand extraction and insertion utilities for PDB lines.
+"""
+
+from __future__ import annotations
+
+
+def extract_ligand(
+    lines:   list[str],
+    resname: str,
+    chains:  set[str] | None = None,
+) -> list[str]:
+    """
+    Return all HETATM and their paired ANISOU lines for *resname*.
+    If *chains* is given, only return lines from those chains.
+    """
+    out: list[str] = []
+    for line in lines:
+        rec = line[:6]
+        if rec not in ("HETATM", "ANISOU"):
+            continue
+        if line[17:20].strip() != resname:
+            continue
+        if chains is not None and line[21] not in chains:
+            continue
+        out.append(line)
+    return out
+
+
+def remove_ligand(lines: list[str], resname: str) -> list[str]:
+    """Remove all HETATM and ANISOU lines whose residue name matches *resname*."""
+    return [
+        l for l in lines
+        if not (l[:6] in ("HETATM", "ANISOU") and l[17:20].strip() == resname)
+    ]
+
+
+def protein_chains(lines: list[str]) -> set[str]:
+    """Return the set of chain IDs found in ATOM records (only A and B)."""
+    chains: set[str] = set()
+    for line in lines:
+        if line.startswith("ATOM  "):
+            ch = line[21]
+            if ch in ("A", "B"):
+                chains.add(ch)
+    return chains
+
+
+def renumber_serial(lines: list[str]) -> list[str]:
+    """
+    Renumber ATOM/HETATM/ANISOU serial numbers sequentially from 1.
+    Each ANISOU receives the same serial as the preceding ATOM/HETATM.
+    """
+    out:    list[str] = []
+    serial: int       = 0
+
+    for line in lines:
+        rec = line[:6]
+        if rec in ("ATOM  ", "HETATM"):
+            serial += 1
+            line    = rec + f"{serial:5d}" + line[11:]
+        elif rec == "ANISOU":
+            line    = rec + f"{serial:5d}" + line[11:]
+        out.append(line)
+
+    return out
