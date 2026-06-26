@@ -36,15 +36,18 @@ def remove_ligand(lines: list[str], resname: str) -> list[str]:
     ]
 
 
-def protein_chains(lines: list[str]) -> set[str]:
-    """Return the set of chain IDs found in ATOM records (only A and B)."""
-    chains: set[str] = set()
+def protein_chains(
+    lines:  list[str],
+    chains: frozenset[str] = frozenset(("A", "B")),
+) -> set[str]:
+    """Return the set of chain IDs found in ATOM records, restricted to *chains*."""
+    found: set[str] = set()
     for line in lines:
         if line.startswith("ATOM  "):
             ch = line[21]
-            if ch in ("A", "B"):
-                chains.add(ch)
-    return chains
+            if ch in chains:
+                found.add(ch)
+    return found
 
 
 def renumber_serial(lines: list[str]) -> list[str]:

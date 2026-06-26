@@ -4,16 +4,18 @@ Orchestrate Michaelis complex preparation for one or all mutants.
 
 For each raw crystal-structure PDB:
 
-  1. clean()     — strip non-A/B chains, GOL, CONECT, rename HIS, rename 216→LER
-  2. align()     — Cα superposition onto the WT_LER reference; apply transform
-  3. write three output files:
-       {mutant}_LER_dimer.pdb  — protein + LER (from the raw structure)
-       {mutant}_NIR_dimer.pdb  — protein + NIR (from the WT_NIR reference)
-       {mutant}_APO_dimer.pdb  — protein only
+  1. clean()     — strip unwanted chains/residues, apply residue_renames,
+                   apply protonation states from reference structure
+  2. align()     — Cα superposition onto the alignment reference; apply transform
+  3. write output files:
+       {mutant}_{inhibitor}_dimer.pdb  — one per inhibitor in inhibitor_sources
+       {mutant}_APO_dimer.pdb          — protein only (always written)
 
-NIR canonical coordinates are taken directly from the WT_NIR reference PDB
-(which is already in the common WT_LER coordinate frame).  Each chain present
-in the mutant protein receives its own copy.
+Inhibitor coordinates come from two sources, configured per inhibitor:
+  "native"          — the ligand is already present in the raw PDB (after
+                      residue_renames are applied)
+  "/path/to/ref.pdb" — coordinates are copied from the named reference PDB,
+                       one copy per chain present in the mutant protein
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .clean  import clean
+from .clean  import clean, build_protonation_map
 from .align  import compute_superposition, apply_transform
 from .ligand import (
     extract_ligand,
@@ -40,6 +42,7 @@ log = logging.getLogger(__name__)
 def _complete_missing_residues(
     aligned: list[str],
     ref:     list[str],
+    chains:  frozenset[str],
 ) -> tuple[list[str], dict[str, set[int]]]:
     """
     Copy ATOM/ANISOU records for protein residues present in *ref* but absent
@@ -47,44 +50,33 @@ def _complete_missing_residues(
 
     Since *aligned* has already been superimposed onto *ref*, the reference
     coordinates are valid substitutes for structurally missing residues.
-
-    Only protein residues (those backed by an ATOM record in *ref*) are
-    considered — ligand ANISOU at e.g. residue 401 are not treated as missing
-    protein residues.
-
-    Returns the extended list and a dict {chain: {resnum, …}} of what was
-    added, for logging purposes.
     """
-    # Residues present in the aligned structure (protein ATOM only)
     present: set[tuple[str, int]] = set()
     for line in aligned:
-        if line.startswith("ATOM  ") and line[21] in ("A", "B"):
+        if line.startswith("ATOM  ") and line[21] in chains:
             try:
                 present.add((line[21], int(line[22:26])))
             except ValueError:
                 pass
 
-    # Protein residues available in the reference (ATOM records only)
     ref_protein: set[tuple[str, int]] = set()
     for line in ref:
-        if line.startswith("ATOM  ") and line[21] in ("A", "B"):
+        if line.startswith("ATOM  ") and line[21] in chains:
             try:
                 ref_protein.add((line[21], int(line[22:26])))
             except ValueError:
                 pass
 
-    # Residues to fill = in ref protein but missing from aligned
     to_fill = ref_protein - present
 
-    # Collect ATOM and ANISOU lines for those residues
     added:      list[str]           = []
-    added_keys: dict[str, set[int]] = {"A": set(), "B": set()}
+    added_keys: dict[str, set[int]] = {ch: set() for ch in chains}
 
     for line in ref:
         if line[:6] not in ("ATOM  ", "ANISOU"):
             continue
         ch = line[21]
-        if ch not in ("A", "B"):
+        if ch not in chains:
             continue
         try:
             resnum = int(line[22:26])
@@ -92,19 +84,16 @@ def _complete_missing_residues(
             continue
         if (ch, resnum) in to_fill:
             added.append(line)
-            added_keys[ch].add(resnum)
+            if ch in added_keys:
+                added_keys[ch].add(resnum)
 
     return aligned + added, added_keys
 
 
 def _sort_protein_lines(lines: list[str]) -> list[str]:
     """
-    Sort ATOM/ANISOU lines by residue number.
-
-    Atoms within the same residue keep their original relative order
-    (N, CA, C, O, CB, …) via a stable sort on (resnum, original_index).
-    This is needed when missing residues copied from the reference are
-    appended at the end and must be interleaved with the existing ones.
+    Sort ATOM/ANISOU lines by residue number, preserving within-residue order.
+    Needed after missing residues copied from the reference are appended at the end.
     """
     keyed = []
     for i, line in enumerate(lines):
@@ -121,6 +110,7 @@ def _write_pdb(
     body:         list[str],
     ligand_lines: list[str],
     out_path:     Path,
+    chains:       frozenset[str],
 ) -> None:
     """
     Write a PDB file with TER records between protein chains.
@@ -135,14 +125,11 @@ def _write_pdb(
       <water HETATM/ANISOU>
       TER
 
-    Sorting by residue number is required when missing residues have been
-    copied from the reference and appended at the end of the body.
-
     tleap requires TER between chains; without it it tries to bond the
     C-terminus of chain A to the N-terminus of chain B.
     """
     header: list[str]            = []
-    prot:   dict[str, list[str]] = {"A": [], "B": []}
+    prot:   dict[str, list[str]] = {ch: [] for ch in chains}
     water:  list[str]            = []
 
     for line in body:
@@ -160,7 +147,7 @@ def _write_pdb(
             header.append(line)
 
     out: list[str] = list(header)
-    for ch in ("A", "B"):
+    for ch in sorted(chains):
         if prot[ch]:
             out.extend(_sort_protein_lines(prot[ch]))
             out.append("TER\n")
@@ -176,64 +163,77 @@ def _write_pdb(
 # ---------------------------------------------------------------------------
 
 def prepare(
-    raw_pdb:    Path,
-    ref_ler:    list[str],
-    ref_nir:    list[str],
-    output_dir: Path,
-    mutant:     str,
-    his_rename: dict[int, str] | None = None,
+    raw_pdb:           Path,
+    alignment_ref:     list[str],
+    inhibitor_sources: dict[str, str],
+    ref_inh_lines:     dict[str, list[str]],
+    output_dir:        Path,
+    mutant:            str,
+    prot_map:          dict[tuple[str, int], str] | None = None,
+    residue_renames:   list[tuple[str, str]] | None = None,
+    chains:            frozenset[str] = frozenset(("A", "B")),
 ) -> None:
     """
-    Produce *{mutant}_LER_dimer.pdb*, *{mutant}_NIR_dimer.pdb*, and
-    *{mutant}_APO_dimer.pdb* in *output_dir* from a raw crystal-structure PDB.
+    Produce inhibitor complex and APO PDBs in *output_dir*.
 
     Parameters
     ----------
-    raw_pdb    : raw crystal structure (e.g. wildtype_1216_refmac6.pdb)
-    ref_ler    : lines of WT_LER_dimer.pdb (pre-loaded) used as superposition reference
-    ref_nir    : lines of WT_NIR_dimer.pdb (pre-loaded) — source of NIR coordinates
-    output_dir : directory where the three output PDBs are written
-    mutant     : name prefix for output files (e.g. "WT", "E166V")
-    his_rename : residue-number → new name mapping (defaults: Mpro protonation)
+    raw_pdb           : raw crystal structure to process
+    alignment_ref     : lines of the alignment reference PDB (pre-loaded)
+    inhibitor_sources : {inhibitor_name: "native" | path_string}
+    ref_inh_lines     : pre-loaded lines for each non-native inhibitor reference
+    output_dir        : directory where output PDBs are written
+    mutant            : name prefix for output files (e.g. "WT", "E166V")
+    prot_map          : (chain, resnum) → resname from reference structure
+    residue_renames   : [(from, to), …] applied before protonation
+    chains            : chain IDs to retain
     """
     raw_lines = raw_pdb.read_text().splitlines(keepends=True)
 
-    # 1. Clean
-    cleaned = clean(raw_lines, his_rename)
+    # 1. Clean: renames + protonation
+    cleaned = clean(raw_lines, prot_map, residue_renames, chains)
 
-    # 2. Align to WT_LER reference frame
-    rot, tran, rms = compute_superposition(cleaned, ref_ler)
+    # 2. Align to reference frame
+    rot, tran, rms = compute_superposition(cleaned, alignment_ref)
     log.info("[%s] Cα RMSD to reference: %.3f Å", mutant, rms)
     aligned = apply_transform(cleaned, rot, tran)
 
     # 3. Fill residues missing from the crystal structure using the reference
-    aligned, filled = _complete_missing_residues(aligned, ref_ler)
+    aligned, filled = _complete_missing_residues(aligned, alignment_ref, chains)
     for ch, resnums in filled.items():
         if resnums:
             log.info("[%s] chain %s: copied %d missing residues from reference (%s)",
                      mutant, ch, len(resnums), sorted(resnums))
             print(f"  chain {ch}: filled residues {sorted(resnums)} from reference")
 
-    chains = protein_chains(aligned)
+    chains_present = protein_chains(aligned, chains)
 
-    # 3a. LER complex — LER is already in aligned lines (renamed from 216)
-    ler_ligand   = extract_ligand(aligned, "LER")
-    protein_body = remove_ligand(aligned, "LER")
+    # Protein body = aligned lines with all native ligands removed
+    native_names = [n for n, s in inhibitor_sources.items() if s == "native"]
+    protein_body = aligned
+    for name in native_names:
+        protein_body = remove_ligand(protein_body, name)
+
     output_dir.mkdir(parents=True, exist_ok=True)
-    _write_pdb(protein_body, ler_ligand, output_dir / f"{mutant}_LER_dimer.pdb")
 
-    # 3b. NIR complex — canonical NIR from WT_NIR reference per available chain
-    nir_ligand: list[str] = []
-    for ch in sorted(chains):
-        nir_ligand.extend(extract_ligand(ref_nir, "NIR", chains={ch}))
+    # 4. Write one PDB per inhibitor
+    for inh_name, source in inhibitor_sources.items():
+        if source == "native":
+            ligand_lines = extract_ligand(aligned, inh_name)
+        else:
+            ref_lines    = ref_inh_lines[inh_name]
+            ligand_lines = []
+            for ch in sorted(chains_present):
+                ligand_lines.extend(extract_ligand(ref_lines, inh_name, chains={ch}))
+            if not ligand_lines:
+                log.warning("[%s] No %s found in reference for chains %s",
+                            mutant, inh_name, chains_present)
 
-    if not nir_ligand:
-        log.warning("[%s] No NIR found in reference for chains %s", mutant, chains)
+        _write_pdb(protein_body, ligand_lines,
+                   output_dir / f"{mutant}_{inh_name}_dimer.pdb", chains)
 
-    _write_pdb(protein_body, nir_ligand, output_dir / f"{mutant}_NIR_dimer.pdb")
-
-    # 3c. APO — protein only
-    _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb")
+    # 5. APO — protein only
+    _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
 
 
 # ---------------------------------------------------------------------------
@@ -241,47 +241,73 @@ def prepare(
 # ---------------------------------------------------------------------------
 
 def prepare_all(
-    structures:   dict[str, str],
-    raw_pdbs_dir: Path,
-    ref_ler_pdb:  Path,
-    ref_nir_pdb:  Path,
-    output_dir:   Path,
-    his_rename:   dict[int, str] | None = None,
-    force:        bool = False,
+    structures:           dict[str, str],
+    raw_pdbs_dir:         Path,
+    alignment_ref_pdb:    Path,
+    inhibitor_sources:    dict[str, str],
+    reference_enzyme_pdb: Path | None,
+    output_dir:           Path,
+    chains:               frozenset[str] = frozenset(("A", "B")),
+    residue_renames:      list[tuple[str, str]] | None = None,
+    force:                bool = False,
 ) -> None:
     """
     Run :func:`prepare` for each entry in *structures*.
 
     Parameters
     ----------
-    structures   : mapping of {raw_pdb_filename: mutant_name}
-    raw_pdbs_dir : directory containing the raw PDB files
-    ref_ler_pdb  : WT_LER_dimer.pdb (alignment reference; read once before any writes)
-    ref_nir_pdb  : WT_NIR_dimer.pdb (NIR coordinate source)
-    output_dir   : where to write the curated dimers
-    his_rename   : HIS protonation overrides
-    force        : overwrite existing output files
+    structures            : {raw_pdb_filename: mutant_name}
+    raw_pdbs_dir          : directory containing the raw PDB files
+    alignment_ref_pdb     : PDB used for Cα superposition and missing-residue filling
+    inhibitor_sources     : {inhibitor_name: "native" | path_to_ref_pdb}
+    reference_enzyme_pdb  : PDB from which protonation states are read; ligands
+                            and water are ignored automatically so a holo structure
+                            is fine. None → no protonation renaming.
+    output_dir            : where to write the curated PDBs
+    chains                : chain IDs to retain
+    residue_renames       : [(from, to), …] applied before protonation
+    force                 : overwrite existing output files
     """
-    # Read reference files once upfront so that overwriting WT outputs
-    # (when WT is also listed in structures) doesn't corrupt the reference data.
-    ref_ler = ref_ler_pdb.read_text().splitlines(keepends=True)
-    ref_nir = ref_nir_pdb.read_text().splitlines(keepends=True)
+    # Read alignment reference once upfront so that overwriting WT outputs
+    # does not corrupt it when WT is also listed in structures.
+    alignment_ref = alignment_ref_pdb.read_text().splitlines(keepends=True)
+
+    # Build protonation map from reference enzyme PDB (protein ATOM records only)
+    prot_map: dict[tuple[str, int], str] | None = None
+    if reference_enzyme_pdb is not None:
+        ref_enz = reference_enzyme_pdb.read_text().splitlines(keepends=True)
+        prot_map = build_protonation_map(ref_enz, chains)
+        log.info("Protonation map loaded from %s (%d positions)",
+                 reference_enzyme_pdb.name, len(prot_map))
+
+    # Pre-load reference PDBs for non-native inhibitors
+    ref_inh_lines: dict[str, list[str]] = {}
+    for inh_name, source in inhibitor_sources.items():
+        if source != "native":
+            ref_inh_lines[inh_name] = Path(source).read_text().splitlines(keepends=True)
+
+    # Expected outputs per structure
+    inh_names = list(inhibitor_sources.keys())
 
     for filename, mutant in structures.items():
         raw_pdb = raw_pdbs_dir / filename
         if not raw_pdb.exists():
             raise FileNotFoundError(f"Raw PDB not found: {raw_pdb}")
 
-        outputs = [
-            output_dir / f"{mutant}_LER_dimer.pdb",
-            output_dir / f"{mutant}_NIR_dimer.pdb",
-            output_dir / f"{mutant}_APO_dimer.pdb",
-        ]
+        outputs = (
+            [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
+            + [output_dir / f"{mutant}_APO_dimer.pdb"]
+        )
         if not force and all(p.exists() for p in outputs):
             log.info("[%s] already done — skipping (use --force to redo)", mutant)
             print(f"[{mutant}] already done — skipping (use --force to redo)")
             continue
 
         print(f"[{mutant}] {raw_pdb.name} ...")
-        prepare(raw_pdb, ref_ler, ref_nir, output_dir, mutant, his_rename)
+        prepare(
+            raw_pdb, alignment_ref,
+            inhibitor_sources, ref_inh_lines,
+            output_dir, mutant,
+            prot_map, residue_renames, chains,
+        )
         print(f"[{mutant}] done → {output_dir}/")
