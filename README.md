@@ -41,6 +41,7 @@ On an HPC cluster, use `senda-slurm` to generate and chain all SLURM scripts aut
 | `senda-complex` | Prepare curated protein-ligand dimer PDBs from raw crystal structures |
 | `senda-sim` | Generate AMBER MD replica directories and optionally submit jobs |
 | `senda-slurm` | Generate a chained SLURM workflow script for the full pipeline |
+| `senda-analyse` | Analyse reactive distances from NVT trajectories and select a representative frame for QM/MM |
 
 ---
 
@@ -215,6 +216,66 @@ bash workflow/submit.sh
 
 ---
 
+## NVT trajectory analysis -- `senda-analyse`
+
+Analyses reactive distances from pooled NVT trajectories across all replicas and selects a single representative frame as the starting point for QM/MM relaxation.
+
+### What it does
+
+For each inhibitor/mutant combination:
+
+1. Loads all `04_NVT/structure_NVT_*.nc` frames from every replica into a pooled dataset
+2. Computes the probability distribution of each reactive distance
+3. Identifies the most probable value (mode) for each distance; warns if the distribution is multimodal
+4. Scores every frame by how close all distances simultaneously are to their modes
+5. Selects the frame where all distances fall within mode +/- 1 sigma (relaxes to 2 or 3 sigma if needed)
+6. Writes the selected frame as a restart file and a distribution plot
+
+### Outputs
+
+One set of files per chain (A, B, ... from `michaelis_complex.chains`):
+
+```
+simulations/{inhibitor}/{mutant}/
++-- {inhibitor}_{mutant}_chainA_representative.rst7
++-- {inhibitor}_{mutant}_chainA_distances.png
++-- {inhibitor}_{mutant}_chainB_representative.rst7
++-- {inhibitor}_{mutant}_chainB_distances.png
+```
+
+### Run
+
+```bash
+senda-analyse --config config.yaml
+senda-analyse --config config.yaml --inhibitors LER NIR   # subset of inhibitors
+senda-analyse --config config.yaml --mutants H172Y        # subset of mutants
+```
+
+APO systems are skipped automatically (reactive distances require a ligand).
+
+### Specifying atoms
+
+Each atom in `reactive_distances` uses one of two fields to identify its residue:
+
+| Field | When to use | Value |
+|---|---|---|
+| `sequence` | Protein / binding-site residues | PDB residue number as it appears in the dimer PDB (same in every monomer) |
+| `substrate_sequence` | Ligand or substrate residues | 1-based AMBER residue number of the substrate in `chains[0]`, as assigned in the parm7 topology |
+
+For `sequence` atoms the equivalent residue in every other monomer is looked up directly from `chain_map[(chain, pdb_resnum)]`. This works as long as protein chains share PDB residue numbers, which is standard for homodimers and homo-oligomers.
+
+For `substrate_sequence` atoms the equivalent residue in every other monomer is determined by **geometric proximity**: the candidate non-solvent residue whose atoms are closest to the declared `sequence` reference atoms (resolved to that chain) is selected. This is necessary because ligands may share a PDB residue number with a protein residue (making direct lookup ambiguous) and because a peptide substrate uses standard amino-acid names that cannot be distinguished by name alone.
+
+To find the correct AMBER resid for your ligand/substrate in `chains[0]`, inspect the parm7 topology with `parmed` or `pytraj`.
+
+### Requirements
+
+```bash
+pip install senda[analysis]   # installs scipy, matplotlib, pytraj
+```
+
+---
+
 ## Configuration reference
 
 All settings live in a single `config.yaml`.
@@ -321,69 +382,82 @@ amber_simulator:
       heating_weight: 20.0                           # kcal/mol/A^2
       equil_schedule: [15.0, 12.0, 9.0, 6.0, 3.0]  # one value per NPT cycle
 
-    # NMR restraints (distance, angle, dihedral). Remove if not needed.
+    # NMR restraints (distance, angle, dihedral). Keyed by inhibitor name so
+    # each ligand can have different restraints (or none -- omit the key).
     # atoms: list of {residue: <resname>, name: <atomname>}
     # 2 atoms = distance, 3 = angle, 4 = dihedral
     # Add index: <n> (0-based) for cross-residue atoms with multiple matches.
     nmr:
-      - type: dihedral
+      LER:
+        - type: dihedral
+          atoms:
+            - {residue: LER, name: O5}
+            - {residue: LER, name: C7}
+            - {residue: LER, name: C6}
+            - {residue: LER, name: N3}
+          r1: -10.0
+          r2:  -5.0
+          r3:  15.0
+          r4:  20.0
+          rk2: 500
+          rk3: 500
+      # NIR: []  # no NMR restraints for NIR -- omit the key or leave empty
+
+# ---- Analysis ----------------------------------------------------------------
+analysis:
+  # Reactive distances are declared per inhibitor so each ligand can track
+  # its own reactive atoms independently.
+  #
+  # sequence:           PDB residue number as it appears in the dimer PDB.
+  #                     Same in every monomer; used for protein residues.
+  # substrate_sequence: AMBER residue number of the substrate in chains[0],
+  #                     as assigned in the parm7 topology (check with parmed/pytraj).
+  #                     Equivalent residues in other monomers are found by geometric proximity.
+  # The analysis runs automatically for every chain in michaelis_complex.chains.
+
+  LER:
+    reactive_distances:
+      - label: "C5-OG_SER144"   # label used in plots and output file names
         atoms:
-          - {residue: LER, name: O5}
-          - {residue: LER, name: C7}
-          - {residue: LER, name: C6}
-          - {residue: LER, name: N3}
-        r1: -10.0
-        r2:  -5.0
-        r3:  15.0
-        r4:  20.0
-        rk2: 500
-        rk3: 500
+          - {substrate_sequence: 301, name: C5}  # AMBER resid of LER in chains[0] (check parm7)
+          - {sequence: 144, name: OG}            # PDB resnum of SER144
+      - label: "C5-NE2_HIS41"
+        atoms:
+          - {substrate_sequence: 301, name: C5}
+          - {sequence: 41,  name: NE2}
+
+  NIR:
+    reactive_distances:
+      - label: "C5-OG_SER144"
+        atoms:
+          - {substrate_sequence: 301, name: C5}  # AMBER resid of NIR in chains[0] (check parm7)
+          - {sequence: 144, name: OG}
+      - label: "C5-NE2_HIS41"
+        atoms:
+          - {substrate_sequence: 301, name: C5}
+          - {sequence: 41,  name: NE2}
 
 # ---- SLURM -------------------------------------------------------------------
 slurm:
   amber_module: apps/amber/24
+  account: MY_ACCOUNT
 
   # Command to activate the Python environment where senda is installed.
   # Examples: "conda activate senda" | "module load python/3.11"
   senda_env: ""
 
-  param:          # ligand parameterization (CPU)
-    time: "4:00:00"
+  cpu:            # param, complex, and launcher jobs
+    partition: cpu
     ntasks: 1
     cpus-per-task: 4
     mem: "8G"
-    partition: cpu
-    account: MY_ACCOUNT
+    time: "4:00:00"
 
-  complex:        # senda-complex (CPU)
-    time: "2:00:00"
-    ntasks: 1
-    cpus-per-task: 1
-    mem: "8G"
-    partition: cpu
-    account: MY_ACCOUNT
-
-  launcher:       # senda-sim setup + sbatch all run_gpu scripts (CPU)
-    time: "0:30:00"
-    ntasks: 1
-    cpus-per-task: 1
-    mem: "4G"
-    partition: cpu
-    account: MY_ACCOUNT
-
-  master:         # stages 00-03 (GPU)
-    time: "1-00:00:00"
+  gpu:            # run_gpu (stages 00-03) and NVT production chunks
+    partition: gpu
     ntasks: 1
     gres: gpu:1
-    partition: gpu
-    account: MY_ACCOUNT
-
-  nvt:            # NVT production chunks (GPU)
     time: "5-00:00:00"
-    ntasks: 1
-    gres: gpu:1
-    partition: gpu
-    account: MY_ACCOUNT
 ```
 
 ---

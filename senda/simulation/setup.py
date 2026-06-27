@@ -29,6 +29,8 @@ Restraints
   NMR restraints (distance, angle, dihedral) are optional. When present in
   amber_simulator.restraints.nmr, a restrainer.py script is generated that
   builds the AMBER DISANG file at job time after tleap creates the topology.
+  nmr may be a plain list (applies to every ligand) or a dict keyed by
+  inhibitor name (per-ligand restraints).
 """
 
 from __future__ import annotations
@@ -99,10 +101,30 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# NMR restraint resolution
+# ---------------------------------------------------------------------------
+
+def _get_nmr_list(sim: dict, inh: str, has_ligand: bool) -> list:
+    """Return the NMR restraint list for *inh*, supporting both formats:
+      - list  -> applies to every ligand (legacy)
+      - dict  -> keyed by inhibitor name (per-ligand)
+    """
+    if not has_ligand:
+        return []
+    raw = (sim.get("restraints") or {}).get("nmr")
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        return raw.get(inh) or []
+    return raw  # plain list: same restraints for all ligands
+
+
+# ---------------------------------------------------------------------------
 # AMBER input files
 # ---------------------------------------------------------------------------
 
-def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
+def _write_input_files(replica_dir: Path, inh: str, sim: dict,
+                       has_ligand: bool = True) -> str:
     """Write all AMBER .in files; return the topology filename."""
     use_hmr  = bool(sim.get("use_hmr", True))
     dt       = 0.004 if use_hmr else 0.002
@@ -110,7 +132,7 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
     temp     = float(sim["temperature"])
 
     restr_cfg  = sim.get("restraints", {}) or {}
-    nmr_list   = restr_cfg.get("nmr") or []
+    nmr_list   = _get_nmr_list(sim, inh, has_ligand)
     has_nmr    = bool(nmr_list)
 
     pos_cfg     = restr_cfg.get("positional", {}) or {}
@@ -187,9 +209,10 @@ def _write_run_scripts(
     inh: str, mut: str, rep: int,
     sim: dict, slurm: dict, topology: str,
     mode: str,
+    has_ligand: bool = True,
 ) -> None:
     use_hmr  = bool(sim.get("use_hmr", True))
-    has_nmr  = bool((sim.get("restraints") or {}).get("nmr"))
+    has_nmr  = bool(_get_nmr_list(sim, inh, has_ligand))
 
     hmr_block = (
         "log '00_prep: HMR'\ncpptraj -i HMR.ccptraj"
@@ -207,15 +230,16 @@ def _write_run_scripts(
     nvt_dir = replica_dir / "04_NVT"
 
     if mode == "cluster":
-        module  = slurm["amber_module"]
-        slurm_m = slurm["master"]
-        slurm_n = slurm["nvt"]
+        module   = slurm["amber_module"]
+        slurm_gpu = slurm["gpu"]
+        account  = slurm["account"]
 
         header = fill(RUN_GPU_HEADER,
-            WALLTIME=slurm_m["time"], NTASKS=slurm_m["ntasks"],
-            GRES=slurm_m["gres"], PARTITION=slurm_m["partition"],
+            WALLTIME=slurm_gpu["time"], NTASKS=slurm_gpu["ntasks"],
+            GRES=slurm_gpu["gres"], PARTITION=slurm_gpu["partition"],
             JOBNAME=_job_name(inh, mut, rep),
-            ACCOUNT=slurm_m["account"], MODULE=module,
+            ACCOUNT=account, MODULE=module,
+            REPLICA_DIR=str(replica_dir.resolve()),
         )
         body = fill(RUN_BODY,
             HMR_BLOCK=hmr_block,
@@ -232,10 +256,10 @@ def _write_run_scripts(
             end      = min(job_idx * cpj, total)
             next_job = f"\nsbatch run_NVT_{job_idx + 1}.cmd" if end < total else ""
             nvt_header = fill(NVT_CLUSTER_HEADER,
-                WALLTIME=slurm_n["time"], NTASKS=slurm_n["ntasks"],
-                GRES=slurm_n["gres"], PARTITION=slurm_n["partition"],
+                WALLTIME=slurm_gpu["time"], NTASKS=slurm_gpu["ntasks"],
+                GRES=slurm_gpu["gres"], PARTITION=slurm_gpu["partition"],
                 JOBNAME=_job_name(inh, mut, rep, chunk=job_idx),
-                ACCOUNT=slurm_n["account"], MODULE=module,
+                ACCOUNT=account, MODULE=module,
             )
             nvt_body = fill(NVT_JOB_BODY,
                 START=start, END=end, TOTAL=total,
@@ -326,15 +350,16 @@ def setup_replica(
         (replica_dir / "00_prep" / "HMR.ccptraj").write_text(HMR_CCPTRAJ)
 
     # NMR restrainer (runs at job time, after tleap builds the topology)
-    nmr_list = (sim.get("restraints") or {}).get("nmr") or []
+    nmr_list = _get_nmr_list(sim, inh, has_ligand)
     if nmr_list:
         _write_exe(replica_dir / "restrainer.py", make_restrainer(nmr_list))
 
     # AMBER input files
-    topology = _write_input_files(replica_dir, inh, sim)
+    topology = _write_input_files(replica_dir, inh, sim, has_ligand=has_ligand)
 
     # Run scripts
-    _write_run_scripts(replica_dir, inh, mut, rep, sim, slurm, topology, mode)
+    _write_run_scripts(replica_dir, inh, mut, rep, sim, slurm, topology, mode,
+                       has_ligand=has_ligand)
 
 
 # ---------------------------------------------------------------------------

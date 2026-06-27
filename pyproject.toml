@@ -11,12 +11,14 @@ dependencies = ["pyyaml", "numpy", "biopython"]
 
 [project.optional-dependencies]
 rdkit = ["rdkit"]
+analysis = ["scipy", "matplotlib", "pytraj"]
 
 [project.scripts]
 senda-param   = "senda.ligand_parameters.run:main"
 senda-complex = "senda.michaelis_complex.run:main"
 senda-sim     = "senda.simulation.run:main"
 senda-slurm   = "senda.workflow.run:main"
+senda-analyse = "senda.analysis.run:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "senda.__version__"}

@@ -70,7 +70,7 @@ def _header(
 # ---------------------------------------------------------------------------
 
 def _param_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = slurm["param"]
+    spec      = {**slurm["cpu"], "account": slurm["account"]}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_param",
@@ -84,7 +84,7 @@ def _param_script(slurm: dict, config: str, out_dir: str) -> str:
 
 
 def _complex_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = slurm.get("complex", {})
+    spec      = {**slurm["cpu"], "account": slurm["account"]}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_complex",
@@ -96,8 +96,8 @@ def _complex_script(slurm: dict, config: str, out_dir: str) -> str:
     return head + f"senda-complex --config {config}\n"
 
 
-def _launch_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = slurm.get("launcher", {})
+def _launch_script(slurm: dict, config: str, out_dir: str, force: bool = False) -> str:
+    spec      = {**slurm["cpu"], "account": slurm["account"]}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_launch",
@@ -106,8 +106,9 @@ def _launch_script(slurm: dict, config: str, out_dir: str) -> str:
         spec      = spec,
         senda_env = senda_env,
     )
+    force_flag = " --force" if force else ""
     body = f"""\
-senda-sim --config {config} setup
+senda-sim --config {config} setup{force_flag}
 
 echo "Submitting replica GPU jobs..."
 for run_gpu in simulations/*/*/replica_*/run_gpu; do
@@ -192,6 +193,8 @@ def main() -> None:
                         help="Path to senda config.yaml")
     parser.add_argument("--skip-param", action="store_true",
                         help="Omit senda-param (use when parameters already exist)")
+    parser.add_argument("--force", action="store_true",
+                        help="Pass --force to senda-sim setup (overwrite existing replica dirs)")
     parser.add_argument("--out-dir", default="workflow", metavar="DIR",
                         help="Directory for generated scripts (default: workflow/)")
     args = parser.parse_args()
@@ -216,20 +219,16 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Validate required slurm sections
-    if not args.skip_param:
-        if not slurm.get("param"):
-            sys.exit("Error: slurm.param is required (or use --skip-param)")
-        _require_keys(slurm["param"], ["time", "partition", "account"], "param")
-        if not slurm.get("amber_module"):
-            sys.exit("Error: slurm.amber_module is required for senda-param")
-
-    for section in ("complex", "launcher"):
-        if not slurm.get(section):
-            sys.exit(
-                f"Error: slurm.{section} is missing from config.\n"
-                f"Add a slurm.{section} section with at least: time, partition, account."
-            )
-        _require_keys(slurm[section], ["time", "partition", "account"], section)
+    if not slurm.get("account"):
+        sys.exit("Error: slurm.account is required")
+    if not slurm.get("cpu"):
+        sys.exit("Error: slurm.cpu section is required")
+    _require_keys(slurm["cpu"], ["time", "partition"], "cpu")
+    if not slurm.get("gpu"):
+        sys.exit("Error: slurm.gpu section is required")
+    _require_keys(slurm["gpu"], ["time", "partition", "gres"], "gpu")
+    if not args.skip_param and not slurm.get("amber_module"):
+        sys.exit("Error: slurm.amber_module is required for senda-param")
 
     # Config path relative to project root (where submit.sh will be run from)
     config_rel = str(config_path)
@@ -246,16 +245,16 @@ def main() -> None:
     _write_exe(out_dir / "senda_complex.sh",
                _complex_script(slurm, config_rel, str(out_dir)))
     _write_exe(out_dir / "senda_launch.sh",
-               _launch_script(slurm, config_rel, str(out_dir)))
+               _launch_script(slurm, config_rel, str(out_dir), force=args.force))
     _write_exe(out_dir / "submit.sh",
                _submit_script(args.skip_param, str(out_dir)))
 
     # Report
     print(f"Generated in {out_dir}/:")
     if not args.skip_param:
-        print(f"  senda_param.sh   -ligand parameterization  [{slurm['param']['time']}]")
-    print(f"  senda_complex.sh -Michaelis complex prep    [{slurm['complex']['time']}]")
-    print(f"  senda_launch.sh  -sim setup + replica sbatch [{slurm['launcher']['time']}]")
+        print(f"  senda_param.sh   -ligand parameterization  [{slurm['cpu']['time']}]")
+    print(f"  senda_complex.sh -Michaelis complex prep    [{slurm['cpu']['time']}]")
+    print(f"  senda_launch.sh  -sim setup + replica sbatch [{slurm['cpu']['time']}]")
     print(f"  submit.sh        -top-level submission script")
     print()
     if args.skip_param:

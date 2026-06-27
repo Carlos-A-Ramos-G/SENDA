@@ -225,12 +225,14 @@ RUN_GPU_HEADER = """\
 #SBATCH --partition=__PARTITION__
 #SBATCH --job-name=__JOBNAME__
 #SBATCH --account=__ACCOUNT__
+#SBATCH --output=__REPLICA_DIR__/slurm-%j.out
+#SBATCH --error=__REPLICA_DIR__/slurm-%j.err
 
 module load __MODULE__
 
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR=__REPLICA_DIR__
 """
 
 NVT_CLUSTER_HEADER = """\
@@ -249,8 +251,8 @@ module load __MODULE__
 
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$DIR"
+cd "${SLURM_SUBMIT_DIR}"
+DIR=$(pwd)
 """
 
 # ---------------------------------------------------------------------------
