@@ -53,7 +53,7 @@ def _build_chain_map(pdb_path: Path, top) -> dict:
     their AMBER resids must be declared explicitly via substrate_sequence.
     """
     pdb_res      = _parse_pdb_residues(pdb_path)
-    pdb_resnames = {rname for _, _, rname in pdb_res}  # protein + ligand names only
+    pdb_resnames = {rname for _, _, rname in pdb_res}
 
     amber_res = [(r.index, r.name) for r in top.residues if r.name in pdb_resnames]
 
@@ -64,7 +64,6 @@ def _build_chain_map(pdb_path: Path, top) -> dict:
             f"Ensure {pdb_path.name} is the exact file fed to tleap."
         )
 
-    # Store 1-based AMBER residue numbers to match PDB and AMBER convention
     return {
         (chain, resnum): amber_idx + 1
         for (chain, resnum, _), (amber_idx, _) in zip(pdb_res, amber_res)
@@ -106,7 +105,6 @@ def _build_substrate_chain_map(
         )
     coords = pt.load(nc_files[0], top=str(top_path), frame_indices=[0]).xyz[0]
 
-    # Pre-compute atom coordinates for each substrate copy
     cand_coords: dict = {
         ar: coords[[a.index for a in top_atoms if a.resid + 1 == ar]]
         for ar in all_substrate_amber
@@ -116,7 +114,6 @@ def _build_substrate_chain_map(
     remaining: set  = set(all_substrate_amber)
 
     for ch in protein_chains:
-        # Reference: protein atoms in this chain resolved via PDB resnum
         ref_list = []
         for spec in sequence_specs:
             amber_ch = chain_map.get((ch, spec["pdb_resnum"]))
@@ -135,7 +132,6 @@ def _build_substrate_chain_map(
             )
         ref_arr = np.array(ref_list)
 
-        # Pick the closest unassigned substrate copy
         best_amber, best_dist = None, float("inf")
         for ar in remaining:
             cand_c = cand_coords[ar]
@@ -151,7 +147,6 @@ def _build_substrate_chain_map(
             raise ValueError(f"No substrate candidate found for chain {ch!r}")
 
         remaining.discard(best_amber)
-        # Map every user-declared substrate_sequence key to this chain's copy
         result[ch] = {amber_A: best_amber for amber_A in substrate_A_set}
 
     return result
@@ -218,7 +213,6 @@ def _find_topology(rep_dir: Path) -> Path:
 
 
 def _find_pdb(rep1_dir: Path, protein_dir: Path, inh: str, mut: str) -> Path:
-    # Prefer the copy in 00_prep -- that is exactly what tleap received
     p = rep1_dir / "00_prep" / f"{mut}_{inh}_dimer.pdb"
     if p.exists():
         return p
@@ -259,14 +253,35 @@ def _analyse_column(values: np.ndarray):
     return mode, mean, std, counts, bin_centers, multimodal
 
 
+def _find_first_peak(r: np.ndarray, g: np.ndarray) -> float:
+    """Return radius of the first peak in g(r). Falls back to argmax if scipy unavailable."""
+    try:
+        from scipy.ndimage import uniform_filter1d
+        from scipy.signal import find_peaks
+        smoothed = uniform_filter1d(g, size=5)
+        peaks, _ = find_peaks(smoothed)
+        if len(peaks) > 0:
+            return float(r[peaks[0]])
+        return float(r[np.argmax(smoothed)])
+    except ImportError:
+        return float(r[np.argmax(g)])
+
+
 # ---------------------------------------------------------------------------
 # Frame selection
 # ---------------------------------------------------------------------------
 
-def _select_frame(pooled: np.ndarray, modes: list, stds: list) -> int:
+def _select_frame(
+    pooled:          np.ndarray,
+    modes:           list,
+    stds:            list,
+    water_penalties: np.ndarray = None,
+) -> int:
     safe_stds  = np.array([max(s, 1e-10) for s in stds])
     deviations = np.abs(pooled - np.array(modes)) / safe_stds
     scores     = deviations.sum(axis=1)
+    if water_penalties is not None:
+        scores = scores + water_penalties
 
     for sigma in (1, 2, 3):
         mask = np.all(deviations <= sigma, axis=1)
@@ -319,6 +334,27 @@ def _plot(out_path, dist_specs, pooled, modes, means, stds, multimodal_flags, se
     plt.close(fig)
 
 
+def _plot_rdf(out_path, r, g, peak_r, tolerance, label):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(r, g, color="steelblue", lw=1.5, label="g(r)")
+    ax.axvline(peak_r, color="red", linestyle="--", label=f"1st peak {peak_r:.2f} A")
+    ax.axvspan(
+        peak_r - tolerance, peak_r + tolerance,
+        color="red", alpha=0.15, label=f"+/- {tolerance} A",
+    )
+    ax.set_xlabel("r (A)")
+    ax.set_ylabel("g(r)")
+    ax.set_title(f"Water RDF: {label}")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(str(out_path), dpi=150)
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Per-chain analysis
 # ---------------------------------------------------------------------------
@@ -326,6 +362,7 @@ def _plot(out_path, dist_specs, pooled, modes, means, stds, multimodal_flags, se
 def _analyse_chain(
     chain:               str,
     chain_specs:         list,
+    rdf_specs:           list,
     n_replicas:          int,
     sim_base:            Path,
     inh:                 str,
@@ -335,6 +372,8 @@ def _analyse_chain(
     substrate_chain_map: dict,
     plots_dir:           Path,
     data_dir:            Path,
+    rdf_plots_dir:       Path,
+    rdf_data_dir:        Path,
 ) -> None:
     import pytraj as pt
 
@@ -342,6 +381,7 @@ def _analyse_chain(
     top_atoms    = list(top.atoms)
     top_residues = list(top.residues)
 
+    # --- Reactive distance atom pairs ---
     labels     = []
     atom_pairs = []
     for spec in chain_specs:
@@ -362,7 +402,45 @@ def _analyse_chain(
         print(f"          atom1 @{idx1}  {a1.name} res {r1.index + 1} ({r1.name})")
         print(f"          atom2 @{idx2}  {a2.name} res {r2.index + 1} ({r2.name})")
 
-    # Pool distances across all replicas
+    # --- RDF setup (chain-aware center atom resolution) ---
+    resolved_rdf = []
+    for rdf_spec in rdf_specs:
+        center_indices = [
+            _resolve_atom_index(chain_map, top_atoms, ca, chain, substrate_chain_map)
+            for ca in rdf_spec["center_atoms"]
+        ]
+        resolved_rdf.append({
+            "label":          rdf_spec.get("label", "water_rdf"),
+            "center_indices": center_indices,
+            "r_max":          float(rdf_spec.get("r_max", 10.0)),
+            "tolerance":      float(rdf_spec.get("tolerance", 0.3)),
+            "penalty":        float(rdf_spec.get("penalty", 3.0)),
+            "bin_width":      0.05,
+        })
+
+    # WAT-O atom indices (0-based) -- shared by all RDF specs
+    wat_o_idx = [
+        a.index for a in top_atoms
+        if a.name == "O" and top_residues[a.resid].name == "WAT"
+    ]
+
+    # Per-RDF accumulators
+    rdf_edges       = []
+    rdf_hist        = []
+    rdf_frame_dists = []  # list[list[np.ndarray]]: per-rdf, per-frame water distances <= r_max
+    rdf_vol_sum     = []
+    rdf_n_frames    = []
+
+    for rr in resolved_rdf:
+        n_bins = int(rr["r_max"] / rr["bin_width"])
+        edges  = np.linspace(0.0, rr["r_max"], n_bins + 1)
+        rdf_edges.append(edges)
+        rdf_hist.append(np.zeros(n_bins, dtype=float))
+        rdf_frame_dists.append([])
+        rdf_vol_sum.append(0.0)
+        rdf_n_frames.append(0)
+
+    # --- Replica loop ---
     all_dist_cols = [[] for _ in atom_pairs]
     frame_lookup  = []
 
@@ -373,11 +451,12 @@ def _analyse_chain(
             print(f"    replica_{rep_n}: no NVT trajectories found, skipping")
             continue
 
-        traj     = pt.load(nc_files, top=str(top_path))
+        traj = pt.load(nc_files, top=str(top_path))
         pt.autoimage(traj)
         n_frames = len(traj)
         print(f"    replica_{rep_n}: {n_frames} frames")
 
+        # Reactive distances
         for col_i, (idx1, idx2) in enumerate(atom_pairs):
             dists = pt.distance(traj, f"@{idx1} @{idx2}")
             all_dist_cols[col_i].extend(dists.tolist())
@@ -385,13 +464,36 @@ def _analyse_chain(
         for local_i in range(1, n_frames + 1):
             frame_lookup.append((rep_n, local_i))
 
+        # Water RDF (vectorised over all frames in this replica load)
+        if resolved_rdf:
+            xyz = traj.xyz                      # (n_frames, n_atoms, 3)
+            uc  = traj.unitcells                # (n_frames, 6): [a, b, c, alpha, beta, gamma]
+            volumes = uc[:, 0] * uc[:, 1] * uc[:, 2]   # orthorhombic approximation
+
+            for rdf_i, rr in enumerate(resolved_rdf):
+                center_idx_0 = [i - 1 for i in rr["center_indices"]]
+                centroids    = xyz[:, center_idx_0, :].mean(axis=1)  # (n_frames, 3)
+                wat_coords   = xyz[:, wat_o_idx, :]                  # (n_frames, n_wat, 3)
+                diff         = wat_coords - centroids[:, np.newaxis, :]
+                all_dists    = np.sqrt((diff ** 2).sum(axis=2))      # (n_frames, n_wat)
+
+                in_range = all_dists <= rr["r_max"]
+                rdf_hist[rdf_i] += np.histogram(all_dists[in_range], bins=rdf_edges[rdf_i])[0]
+
+                for fi in range(n_frames):
+                    rdf_frame_dists[rdf_i].append(all_dists[fi, in_range[fi]])
+
+                rdf_vol_sum[rdf_i]  += float(np.sum(volumes))
+                rdf_n_frames[rdf_i] += n_frames
+
     if not frame_lookup:
         print(f"  No frames collected for chain {chain}, skipping")
         return
 
-    pooled = np.column_stack([np.array(col) for col in all_dist_cols])
+    pooled   = np.column_stack([np.array(col) for col in all_dist_cols])
+    n_pooled = len(frame_lookup)
 
-    # Distribution analysis
+    # --- Distance distribution analysis ---
     modes, means, stds, multimodal_flags = [], [], [], []
     print(f"\n  {'Label':<24} {'Mode':>8} {'Mean':>8} {'Std':>8}  Multimodal")
     print(f"  {'-'*24} {'-'*8} {'-'*8} {'-'*8}  ----------")
@@ -405,8 +507,58 @@ def _analyse_chain(
         if mm:
             print(f"    WARNING: multimodal distribution for {label!r} -- using highest-probability peak")
 
-    # Frame selection
-    best_row           = _select_frame(pooled, modes, stds)
+    # --- Water RDF: compute g(r), find first peak, per-frame penalty ---
+    water_penalties = np.zeros(n_pooled)
+
+    for rdf_i, rr in enumerate(resolved_rdf):
+        edges     = rdf_edges[rdf_i]
+        r_centers = 0.5 * (edges[:-1] + edges[1:])
+        avg_vol   = rdf_vol_sum[rdf_i] / rdf_n_frames[rdf_i]
+        n_wat     = len(wat_o_idx)
+        rho       = n_wat / avg_vol
+        shell_vol = 4.0 * np.pi * r_centers ** 2 * rr["bin_width"]
+        # g(r) = <n(r)> / (rho * dV(r))  where <n(r)> = total_count / n_frames
+        g_r = (rdf_hist[rdf_i] / rdf_n_frames[rdf_i]) / (rho * shell_vol)
+
+        peak_r = _find_first_peak(r_centers, g_r)
+        tol    = rr["tolerance"]
+        print(
+            f"\n  RDF [{rr['label']}]: first peak at {peak_r:.2f} A "
+            f"(window {peak_r - tol:.2f} - {peak_r + tol:.2f} A)"
+        )
+
+        n_penalised = 0
+        for fi, frame_d in enumerate(rdf_frame_dists[rdf_i]):
+            in_window = bool(np.any((frame_d >= peak_r - tol) & (frame_d <= peak_r + tol)))
+            if not in_window:
+                water_penalties[fi] += rr["penalty"]
+                n_penalised += 1
+        frac = n_penalised / n_pooled * 100
+        print(f"  Frames without water at first peak: {n_penalised}/{n_pooled} ({frac:.1f}%)")
+
+        # Save RDF CSV
+        stem     = f"{inh}_{mut}_chain{chain}_{rr['label']}"
+        csv_path = rdf_data_dir / f"{stem}.csv"
+        csv_path.write_text(
+            "r,g_r\n"
+            + "\n".join(f"{r:.4f},{g:.6f}" for r, g in zip(r_centers, g_r))
+            + "\n"
+        )
+        print(f"  RDF data:    {csv_path}")
+
+        try:
+            import matplotlib  # noqa: F401
+            plot_path = rdf_plots_dir / f"{stem}.png"
+            _plot_rdf(plot_path, r_centers, g_r, peak_r, tol, rr["label"])
+            print(f"  RDF plot:    {plot_path}")
+        except ImportError:
+            print("  NOTE: matplotlib not installed, skipping RDF plot")
+
+    # --- Frame selection (distance score + soft water penalty) ---
+    best_row = _select_frame(
+        pooled, modes, stds,
+        water_penalties if resolved_rdf else None,
+    )
     best_rep, best_loc = frame_lookup[best_row]
     print(f"\n  Selected: replica {best_rep}, frame {best_loc}")
     print(f"\n  {'Label':<24} {'Selected':>10}")
@@ -414,14 +566,16 @@ def _analyse_chain(
     for i, label in enumerate(labels):
         print(f"  {label:<24} {pooled[best_row, i]:>10.3f}")
 
-    # Write rst7
-    nc_files_sel = sorted(glob.glob(str(sim_base / f"replica_{best_rep}" / "04_NVT" / "structure_NVT_*.nc")))
-    traj_sel     = pt.load(nc_files_sel, top=str(top_path))
-    rst7_path    = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"
+    # --- Write rst7 ---
+    nc_files_sel = sorted(glob.glob(
+        str(sim_base / f"replica_{best_rep}" / "04_NVT" / "structure_NVT_*.nc")
+    ))
+    traj_sel  = pt.load(nc_files_sel, top=str(top_path))
+    rst7_path = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"
     pt.write_traj(str(rst7_path), traj_sel[best_loc - 1:best_loc], format="rst7", overwrite=True)
     print(f"\n  Restart written: {rst7_path}")
 
-    # Save CSV data
+    # --- Save distances CSV ---
     stem     = f"{inh}_{mut}_chain{chain}_distances"
     csv_path = data_dir / f"{stem}.csv"
     header   = "replica,frame," + ",".join(labels)
@@ -432,14 +586,14 @@ def _analyse_chain(
     csv_path.write_text(header + "\n" + "\n".join(rows) + "\n")
     print(f"  Data written:    {csv_path}")
 
-    # Plot
+    # --- Plot distances ---
     try:
         import matplotlib  # noqa: F401
         plot_path = plots_dir / f"{stem}.png"
         _plot(plot_path, chain_specs, pooled, modes, means, stds, multimodal_flags, best_row)
         print(f"  Plot written:    {plot_path}")
     except ImportError:
-        print("  NOTE: matplotlib not installed, skipping plot")
+        print("  NOTE: matplotlib not installed, skipping distance plot")
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +604,7 @@ def analyse(
     inh:         str,
     mut:         str,
     dist_specs:  list,
+    rdf_specs:   list,
     n_replicas:  int,
     chains:      list,
     protein_dir: Path,
@@ -470,13 +625,13 @@ def analyse(
     top_residues = list(top.residues)
     chain_map    = _build_chain_map(pdb_path, top)
 
-    # Collect unique sequence specs (PDB resnum + atom name) and substrate resids
+    # Collect unique sequence specs and substrate resids from both dist and RDF specs
     seen_seq:        set  = set()
     sequence_specs:  list = []
     substrate_A_set: set  = set()
 
-    for ds in dist_specs:
-        for spec in ds["atoms"]:
+    def _collect_atom_specs(atom_specs):
+        for spec in atom_specs:
             if "substrate_sequence" in spec:
                 substrate_A_set.add(spec["substrate_sequence"])
             elif "sequence" in spec:
@@ -485,11 +640,14 @@ def analyse(
                     seen_seq.add(key)
                     sequence_specs.append({"pdb_resnum": spec["sequence"], "name": spec["name"]})
 
+    for ds in dist_specs:
+        _collect_atom_specs(ds["atoms"])
+
+    for rs in rdf_specs:
+        _collect_atom_specs(rs.get("center_atoms", []))
+
     substrate_chain_map: dict = {}
     if substrate_A_set:
-        # Find ALL copies of the substrate in the topology by residue name.
-        # This is chain-order-independent: we don't assume substrate_sequence
-        # belongs to chains[0]; proximity assigns the right copy to each chain.
         sub_name            = top_residues[next(iter(substrate_A_set)) - 1].name
         all_substrate_amber = {r.index + 1 for r in top_residues if r.name == sub_name}
         substrate_chain_map = _build_substrate_chain_map(
@@ -510,10 +668,16 @@ def analyse(
     plots_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    rdf_plots_dir = cwd / "Analysis" / "plots" / "rdf"
+    rdf_data_dir  = cwd / "Analysis" / "data"  / "rdf"
+    if rdf_specs:
+        rdf_plots_dir.mkdir(parents=True, exist_ok=True)
+        rdf_data_dir.mkdir(parents=True, exist_ok=True)
+
     for chain in chains:
         print(f"\n  --- Chain {chain} ---")
         _analyse_chain(
-            chain, dist_specs, n_replicas, sim_base, inh, mut,
+            chain, dist_specs, rdf_specs, n_replicas, sim_base, inh, mut,
             top_path, chain_map, substrate_chain_map,
-            plots_dir, data_dir,
+            plots_dir, data_dir, rdf_plots_dir, rdf_data_dir,
         )

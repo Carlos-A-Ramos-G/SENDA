@@ -57,6 +57,7 @@ def main() -> None:
         dist_specs = inh_cfg.get("reactive_distances") \
                      or analysis_cfg.get("reactive_distances") \
                      or []
+        rdf_specs  = inh_cfg.get("water_rdf") or []
         if not dist_specs:
             print(f"Skipping {inh}: no reactive_distances configured")
             continue
@@ -64,7 +65,7 @@ def main() -> None:
         for mut in mutants:
             print(f"\n=== {inh} / {mut} ===")
             try:
-                analyse(inh, mut, dist_specs, n_replicas, chains, protein_dir, cwd)
+                analyse(inh, mut, dist_specs, rdf_specs, n_replicas, chains, protein_dir, cwd)
             except FileNotFoundError as exc:
                 print(f"  WARNING: {exc} -- skipping")
             except Exception as exc:

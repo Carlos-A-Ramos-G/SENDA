@@ -227,9 +227,10 @@ For each inhibitor/mutant combination:
 1. Loads all `04_NVT/structure_NVT_*.nc` frames from every replica into a pooled dataset
 2. Computes the probability distribution of each reactive distance
 3. Identifies the most probable value (mode) for each distance; warns if the distribution is multimodal
-4. Scores every frame by how close all distances simultaneously are to their modes
-5. Selects the frame where all distances fall within mode +/- 1 sigma (relaxes to 2 or 3 sigma if needed)
-6. Writes the selected frame as a restart file and a distribution plot
+4. If `water_rdf` is configured: computes the radial distribution function g(r) of WAT-O atoms around the specified center, finds the first coordination shell peak, and adds a soft score penalty to frames that have no water within peak +/- tolerance
+5. Scores every frame by the sum of sigma-normalised distance deviations plus any water penalties
+6. Selects the frame where all distances fall within mode +/- 1 sigma (relaxes to 2 or 3 sigma if needed), preferring frames that also satisfy the water criterion
+7. Writes the selected frame as a restart file, distance distribution plots, and (if configured) RDF plots
 
 ### Outputs
 
@@ -238,10 +239,28 @@ One set of files per chain (A, B, ... from `michaelis_complex.chains`):
 ```
 simulations/{inhibitor}/{mutant}/
 +-- {inhibitor}_{mutant}_chainA_representative.rst7
-+-- {inhibitor}_{mutant}_chainA_distances.png
 +-- {inhibitor}_{mutant}_chainB_representative.rst7
-+-- {inhibitor}_{mutant}_chainB_distances.png
+
+Analysis/
++-- data/
+|   +-- distances/
+|   |   +-- {inhibitor}_{mutant}_chainA_distances.csv
+|   |   +-- {inhibitor}_{mutant}_chainB_distances.csv
+|   +-- rdf/                              (only if water_rdf is configured)
+|       +-- {inhibitor}_{mutant}_chainA_{label}.csv
+|       +-- {inhibitor}_{mutant}_chainB_{label}.csv
++-- plots/
+    +-- distances/
+    |   +-- {inhibitor}_{mutant}_chainA_distances.png
+    |   +-- {inhibitor}_{mutant}_chainB_distances.png
+    +-- rdf/                              (only if water_rdf is configured)
+        +-- {inhibitor}_{mutant}_chainA_{label}.png
+        +-- {inhibitor}_{mutant}_chainB_{label}.png
 ```
+
+Distance CSV columns: `replica,frame,<label1>,<label2>,...` (frame is 1-based within each replica's concatenated trajectory; VMD frame = CSV frame - 1).
+
+RDF CSV columns: `r,g_r`.
 
 ### Run
 
@@ -255,7 +274,7 @@ APO systems are skipped automatically (reactive distances require a ligand).
 
 ### Specifying atoms
 
-Each atom in `reactive_distances` uses one of two fields to identify its residue:
+Each atom in `reactive_distances` and `water_rdf.center_atoms` uses one of two fields to identify its residue:
 
 | Field | When to use | Value |
 |---|---|---|
@@ -267,6 +286,22 @@ For `sequence` atoms the equivalent residue in every other monomer is looked up 
 For `substrate_sequence` atoms the equivalent residue in every other monomer is determined by **geometric proximity**: the candidate non-solvent residue whose atoms are closest to the declared `sequence` reference atoms (resolved to that chain) is selected. This is necessary because ligands may share a PDB residue number with a protein residue (making direct lookup ambiguous) and because a peptide substrate uses standard amino-acid names that cannot be distinguished by name alone.
 
 To find the correct AMBER resid for your ligand/substrate in `chains[0]`, inspect the parm7 topology with `parmed` or `pytraj`.
+
+### Water RDF
+
+`water_rdf` is an optional list of radial distribution function specifications. Each entry computes g(r) of WAT-O atoms around a reference point and uses the result to add a soft score penalty to frames that have no water near the first coordination shell peak.
+
+```yaml
+water_rdf:
+  - label: "water_CYS145_SG"   # used in output file names
+    center_atoms:               # one or more atoms; multiple atoms use their centroid
+      - {sequence: 145, name: SG}
+    r_max: 10.0                 # maximum radius in Angstroms (default 10.0)
+    tolerance: 0.3              # half-width of the peak window in Angstroms (default 0.3)
+    penalty: 3.0                # score penalty when no water in window (default 3.0)
+```
+
+The penalty is added to the distance-deviation score (lower = better), so a value of 3.0 is equivalent to one distance being 3 sigma from its mode. Frames that satisfy the distance criterion but lack a water at the first peak are deprioritised rather than excluded.
 
 ### Requirements
 
@@ -425,6 +460,13 @@ analysis:
         atoms:
           - {substrate_sequence: 301, name: C5}
           - {sequence: 41,  name: NE2}
+    water_rdf:
+      - label: "water_SER144_OG"
+        center_atoms:
+          - {sequence: 144, name: OG}
+        r_max: 10.0      # Angstroms (default 10.0)
+        tolerance: 0.3   # peak +/- window (default 0.3)
+        penalty: 3.0     # score penalty when no water at first peak (default 3.0)
 
   NIR:
     reactive_distances:
@@ -436,6 +478,7 @@ analysis:
         atoms:
           - {substrate_sequence: 301, name: C5}
           - {sequence: 41,  name: NE2}
+    # water_rdf: []  # omit the key or leave empty for no water RDF
 
 # ---- SLURM -------------------------------------------------------------------
 slurm:
