@@ -1,0 +1,240 @@
+# =============================================================================
+# senda workflow configuration
+# =============================================================================
+
+# --- System -------------------------------------------------------------------
+# inhibitors defines which ligands are processed by every senda-* command.
+# Priority: --ligands CLI flag > inhibitors list > all PDBs found in ligands/.
+# Every entry must have a matching .pdb file in the ligands/ folder.
+inhibitors:
+  - NIR
+#  - LER
+#  - APO
+mutants:
+  - WT
+#  - E166V
+#  - G143S
+#  - A173V
+#  - H172Y
+#  - L50F_E166V
+#  - M165T
+#  - M49I
+#  - M49I_M165I
+#  - M49I_M165T
+#  - M49T
+#  - Q189K
+#  - Q192L
+#  - S144A
+#  - T21I_E166V
+replicas: 10
+
+# --- Ligand parameterization --------------------------------------------------
+ligand_parameters:
+
+  # Charge method:
+  #   bcc  -> AM1-BCC via antechamber (fast, good for most ligands)
+  #   resp -> RESP charges fitted to a Gaussian QM electrostatic potential
+  #            (more accurate; requires Gaussian on HPC)
+  charge_method: bcc
+
+  net_charge: auto   # auto = detect via RDKit, or set an explicit integer
+  multiplicity: 1
+  atom_type: gaff2   # gaff2 | gaff | amber
+
+  forcefield:
+    ligand: leaprc.gaff2
+
+  # Gaussian settings -- only active when charge_method: resp
+  gaussian_opt:
+    nproc: 16
+    mem: "32GB"
+    route: "#P b3lyp/6-31g* opt"
+
+  gaussian_hf:
+    nproc: 16
+    mem: "32GB"
+    route: "#p hf/6-31g(d) SCF=Tight Pop=MK IOp(6/33=2)"
+
+# --- AMBER simulation ---------------------------------------------------------
+amber_simulator:
+  use_hmr: true
+  temperature: 300.0  # K
+
+  production:
+    ns_per_chunk: 100
+    total_chunks: 1
+    chunks_per_job: 1
+
+  min:
+    maxcyc: 30000
+    ncyc: 500
+    cut: 10.0
+    max_cycles_cap: 100
+    convergence_threshold: 3.0e-3
+
+  heat:
+    ps: 200
+
+  equil:
+    npt_ns: 1.25
+    nvt_ns: 5.0
+
+  output:
+    ntpr: 10000
+    ntwx: 500000
+    ntwr: 10000
+
+  # --- Restraints (optional) --------------------------------------------------
+  restraints:
+
+    # Positional (backbone) restraints applied during heating and NPT equilibration.
+    # These defaults work for most protein systems; override only if needed.
+    positional:
+      mask: "@CA,C,N,O,H &!:WAT"
+      heating_weight: 20.0                          # kcal/mol/A^2
+      equil_schedule: [15.0, 12.0, 9.0, 6.0, 3.0] # kcal/mol/A^2, one per NPT cycle
+
+    # NMR restraints (distance, angle, dihedral) written to an AMBER DISANG file.
+    # Keyed by inhibitor name so each ligand can have different (or no) restraints.
+    # Each entry specifies atoms as {residue: <resname>, name: <atomname>}.
+    # For cross-residue atoms that appear multiple times, add index: <n> (0-based)
+    # to disambiguate.
+    nmr:
+      LER:
+        - type: dihedral
+          atoms:
+            - {residue: LER, name: O5}
+            - {residue: LER, name: C7}
+            - {residue: LER, name: C6}
+            - {residue: LER, name: N3}
+          r1: -10.0
+          r2: -5.0
+          r3: 15.0
+          r4: 20.0
+          rk2: 500
+          rk3: 500
+      # NIR: []  # no NMR restraints for NIR -- omit the key or leave empty
+
+# --- Michaelis complex preparation -------------------------------------------
+michaelis_complex:
+
+  # Directory containing the raw crystal-structure PDB files.
+  raw_pdbs_dir: raw_pdbs/
+
+  # Where the curated dimer PDBs are written.
+  output_dir: protein/
+
+  # Chain IDs to retain from raw PDB files.
+  chains: [A, B]
+
+  # Rename residues in raw PDBs before any other processing.
+  # Required when the PDB uses non-standard names (e.g. numeric codes for ligands).
+  residue_renames:
+    - from: "216"
+      to: LER
+
+  # PDB used for Ca superposition and missing-residue filling.
+  alignment_reference: protein/WT_LER_dimer.pdb
+
+  # PDB from which protonation states (HID/HIE/HIP, CYM, ASH, GLH, ...) are read.
+  # Can be a holo structure -- ligands and water are ignored automatically.
+  # Defaults to alignment_reference if omitted.
+  reference_enzyme_pdb: protein/WT_LER_dimer.pdb
+
+  # Where each inhibitor's coordinates come from:
+  #   native               -> already in the raw PDB (after residue_renames)
+  #   path/to/ref.pdb      -> copy coordinates from this reference PDB
+  inhibitor_sources:
+    LER: native
+    NIR: protein/WT_NIR_dimer.pdb
+
+  # Mapping: raw PDB filename -> mutant name used in output file names.
+  # Output: {mutant}_LER_dimer.pdb, {mutant}_NIR_dimer.pdb, {mutant}_APO_dimer.pdb
+  structures:
+    wildtype_1216_refmac6.pdb:                WT
+    E166V_1216_3.1_refmac17.pdb:              E166V
+    G143S_1216_1.9_refmac13.pdb:              G143S
+    A173V_1216_7.1_refmac8.pdb:               A173V
+    H172Y_1216_scaled1_2.27_refmac9.pdb:      H172Y
+    L50F_E166V_1216_6.1_refmac10.pdb:         L50F_E166V
+    M165T_1216_scaled1_1.78_refmac7.pdb:      M165T
+    M49I_1216_scaled1_1.87_refmac8.pdb:       M49I
+    M49I_M165I_1216_7.1_refmac7.pdb:          M49I_M165I
+    M49I_M165T_1216_3.1_refmac8.pdb:          M49I_M165T
+    M49T_1216_1.7_refmac8.pdb:                M49T
+    Q189K_1216_4.1_refmac13.pdb:              Q189K
+    Q192L_1216_1.7_refmac13.pdb:              Q192L
+    S144A_1216_3.1_refmac11.pdb:              S144A
+    T21IE166V_1216_1.95_scaled1_refmac11.pdb: T21I_E166V
+
+# --- Analysis ----------------------------------------------------------------
+analysis:
+
+  # Reactive distances are declared per inhibitor so each ligand can track
+  # its own reactive atoms independently.
+  #
+  # sequence:           PDB residue number as it appears in the dimer PDB.
+  #                     Same in every monomer; used for protein residues.
+  # substrate_sequence: AMBER residue number of the substrate in chains[0],
+  #                     as assigned in the parm7 topology (check with parmed/pytraj).
+  #                     Equivalent residues in other monomers are found by geometric proximity.
+  # The analysis runs automatically for every chain in michaelis_complex.chains.
+
+  LER:
+    reactive_distances:
+      - label: "CYS145_SG-C7_LER"
+        atoms:
+          - {substrate_sequence: 613, name: C7}  # AMBER resid of LER in chains[0] (from parm7)
+          - {sequence: 145, name: SG}            # PDB resnum of CYS145
+      - label: "CYS145_SG-NE2_HIS41"
+        atoms:
+          - {sequence: 145, name: SG}   # PDB resnum of CYS145
+          - {sequence: 41,  name: NE2}  # PDB resnum of HIS41
+    water_rdf:
+      - label: "water_HIS41_NE2"
+        center_atoms:
+          - {sequence: 41, name: NE2}
+        r_max: 10.0      # Angstroms; default 10.0
+        tolerance: 0.3   # peak +/- window for frame scoring; default 0.3
+        penalty: 3.0     # score penalty when no water at first peak; default 3.0
+
+  NIR:
+    reactive_distances:
+      - label: "CYS145_SG-C19_NIR"
+        atoms:
+          - {substrate_sequence: 613, name: C19}  # AMBER resid of NIR in chains[0] (check parm7)
+          - {sequence: 145, name: SG}
+      - label: "CYS145_SG-NE2_HIS41"
+        atoms:
+          - {sequence: 145, name: SG}
+          - {sequence: 41,  name: NE2}
+    water_rdf:
+      - label: "water_HIS41_NE2"
+        center_atoms:
+          - {sequence: 41, name: NE2}
+        r_max: 10.0
+        tolerance: 0.3
+        penalty: 3.0
+
+# --- SLURM -------------------------------------------------------------------
+slurm:
+  amber_module: apps/amber/24
+  account: XXXXXXXXXX
+
+  # Optional: shell command to activate the environment where senda is installed.
+  # Inserted into senda-complex and senda-launch scripts before any senda-* call.
+  # Examples: "conda activate senda" | "module load python/3.11"
+  senda_env: ""
+
+  cpu:                         # param, complex, and launcher jobs
+    partition: xxxxx
+    ntasks: 1
+    cpus-per-task: 4
+    mem: "8G"
+    time: "4:00:00"
+
+  gpu:                         # run_gpu (stages 00-03) and NVT production chunks
+    partition: gpu
+    ntasks: 1
+    gres: gpu:1
+    time: "5-00:00:00"

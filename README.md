@@ -26,7 +26,13 @@ ligand PDBs       ->  senda-param   ->  GAFF parameters
                                                   |
                        senda-sim    ->  AMBER MD replicas
                                                   |
-                       senda-pmf    ->  free energy profiles  (planned)
+                       senda-analyse ->  representative frame (rst7)
+                                                  |
+                       senda-qmmm string equil   ->  QM/MM equilibration
+                                                  |
+                       senda-qmmm string scan    ->  restrained path scan
+                                                  |
+                       senda-qmmm string string  ->  free energy profile (ASM)
 ```
 
 On an HPC cluster, use `senda-slurm` to generate and chain all SLURM scripts automatically.
@@ -42,6 +48,9 @@ On an HPC cluster, use `senda-slurm` to generate and chain all SLURM scripts aut
 | `senda-sim` | Generate AMBER MD replica directories and optionally submit jobs |
 | `senda-slurm` | Generate a chained SLURM workflow script for the full pipeline |
 | `senda-analyse` | Analyse reactive distances from NVT trajectories and select a representative frame for QM/MM |
+| `senda-qmmm string equil` | Stage 05: set up and optionally submit the QM/MM equilibration job |
+| `senda-qmmm string scan` | Stage 06: set up the restrained scan along the initial guess path |
+| `senda-qmmm string string` | Stage 07: set up the adaptive string method (ASM) calculation |
 
 ---
 
@@ -101,19 +110,34 @@ ligands_libraries/
 
 Converts raw crystallographic PDB files into curated protein-ligand dimer PDBs ready for AMBER MD.
 
+### Config blocks read
+
+`senda-complex` reads three blocks from `config.yaml`:
+
+| Block | Role |
+|---|---|
+| `michaelis_complex:` | All structural settings (required) |
+| `inhibitors:` | Top-level list used to filter which inhibitors are written (optional — all if absent) |
+| `mutants:` | Top-level list used to filter which structures are processed (optional — all if absent) |
+
+Everything else in the config (`amber_simulator:`, `analysis:`, `qmmm:`, etc.) is ignored.
+
 ### What it does
 
-For each structure listed in `michaelis_complex.structures`:
+For each structure in `michaelis_complex.structures` whose mutant name appears in the top-level `mutants:` list (or all structures if `mutants:` is absent or empty):
 
 1. **Clean** -- strips CONECT/END records and unwanted HETATM residues; keeps only the specified chains; applies `residue_renames`; copies protonation states (HID/HIE/HIP, CYM, ASH, GLH, etc.) from the reference enzyme PDB, skipping any positions that are mutated.
 2. **Align** -- superimposes the cleaned structure onto the alignment reference by Ca RMSD (Kabsch). ANISOU records are carried through.
-3. **Write output PDBs** -- one per inhibitor listed in `inhibitor_sources`, plus an APO (protein-only) file:
+3. **Fill missing residues** -- residues present in the alignment reference but absent in the raw PDB are copied from the reference (valid because the structure has already been superimposed).
+4. **Write output PDBs** -- one per inhibitor listed in `inhibitor_sources`, plus an APO (protein-only) file:
    - `{mutant}_{inhibitor}_dimer.pdb` -- protein + ligand
    - `{mutant}_APO_dimer.pdb` -- protein only
 
 Ligand coordinates come from either the raw PDB itself (`native`) or a reference PDB you supply.
 
 ### Inputs
+
+The alignment reference PDB must already exist before running `senda-complex`. Typically this is a manually curated WT + ligand structure that serves as the common coordinate frame for all other structures.
 
 ```
 your_project/
@@ -122,7 +146,7 @@ your_project/
 |   +-- wildtype.pdb
 |   +-- mutant1.pdb
 +-- protein/
-    +-- WT_LER_dimer.pdb      # alignment reference (must exist)
+    +-- WT_LER_dimer.pdb      # alignment reference -- must exist beforehand
     +-- WT_NIR_dimer.pdb      # NIR coordinate source (if NIR is not native)
 ```
 
@@ -133,9 +157,23 @@ senda-complex --config config.yaml
 senda-complex --config config.yaml --force   # re-run even if outputs exist
 ```
 
-### Filtering by mutants list
+### Filtering by inhibitors and mutants
 
-If a top-level `mutants:` list is present in the config, only structures whose mapped mutant name appears in that list are processed. Remove or leave `mutants:` empty to process all structures.
+Both filters are optional and mirror each other:
+
+```yaml
+inhibitors:    # optional -- omit or leave empty to process all entries in inhibitor_sources
+  - LER
+  - NIR
+
+mutants:       # optional -- omit or leave empty to process all structures
+  - WT
+  - E166V
+```
+
+If `inhibitors:` is set, only the matching keys from `michaelis_complex.inhibitor_sources` are written as output PDBs. If absent or empty, all entries in `inhibitor_sources` are used.
+
+If `mutants:` is set, only structures whose mapped mutant name appears in the list are processed. If absent or empty, all entries in `michaelis_complex.structures` are processed.
 
 ---
 
@@ -308,6 +346,99 @@ The penalty is added to the distance-deviation score (lower = better), so a valu
 ```bash
 pip install senda[analysis]   # installs scipy, matplotlib, pytraj
 ```
+
+---
+
+## QM/MM string method -- `senda-qmmm string`
+
+Drives the three-stage QM/MM adaptive string method (ASM) workflow using AMBER's `sander.MPI`. Each stage is independently callable so individual steps can be re-run without restarting the full pipeline.
+
+### Prerequisites
+
+```bash
+pip install senda[qmmm]   # installs parmed, pytraj
+```
+
+AMBER with `sander.MPI` and `cpptraj` must be in `$PATH` (or loaded via a module on the cluster).
+
+### Stages
+
+| Subcommand | Stage | What it does |
+|---|---|---|
+| `senda-qmmm string equil` | 05 | Resolves CV atoms and QM region, builds H10 topology, writes AMBER input + SLURM script for QM/MM equilibration |
+| `senda-qmmm string scan` | 06 | Writes per-node harmonic restraint files from the interpolated guess, AMBER input template, scan SLURM script, and cpptraj centering script |
+| `senda-qmmm string string` | 07 | Writes CVs file, string guess, per-node input files (`in.sh`), groupfile, and SLURM script for `sander.MPI -ng N -groupfile` |
+
+### Run
+
+```bash
+# Write all input files (no job submission)
+senda-qmmm string equil  config.yaml
+senda-qmmm string scan   config.yaml
+senda-qmmm string string config.yaml
+
+# Write and submit to SLURM
+senda-qmmm string equil  -s config.yaml
+senda-qmmm string scan   -s --after <equil_jobid>  config.yaml
+senda-qmmm string string -s --after <scan_jobid>   config.yaml
+
+# Process only one inhibitor / mutant
+senda-qmmm string equil -i LER -m WT config.yaml
+```
+
+### Outputs
+
+All output lives alongside the replica directories for each inhibitor/mutant combination:
+
+```
+simulations/{inhibitor}/{mutant}/
++-- structure_H10.parm7           # topology with QM hydrogen masses set to 10 amu
++-- _guess_interpolated.npy       # arc-length-interpolated guess (internal cache)
++-- _qmmm_string_meta.json        # resolved metadata shared across stages
++-- 05_QMMM_equilibration/
+|   +-- in                        # AMBER QM/MM input
+|   +-- restr                     # extra restraints (AMBER &rst blocks)
+|   +-- equilibration.sh          # SLURM script
++-- 06_QMMM_scan/
+|   +-- in_template               # AMBER input with __NODE__ placeholder
+|   +-- restr0                    # extra restraints appended per node by scan job
+|   +-- restr{1..N}               # per-node CV harmonic restraints
+|   +-- scan.sh                   # SLURM script (sequential node loop)
+|   +-- center.sh                 # cpptraj centering script (run at end of scan)
++-- 07_QMMM_string/
+    +-- in                        # AMBER string input (__SEED__ filled by in.sh)
+    +-- in.sh                     # generates per-node {i}.in files + string.groupfile
+    +-- guess                     # string guess with AMBER header (N_nodes  N_cvs  0.0)
+    +-- CVs                       # AMBER CVs file for sander ASM
+    +-- string.sh                 # SLURM script (sander.MPI -ng N -groupfile)
+```
+
+### Collective variable atom specs
+
+CV atoms use the same residue-by-name syntax as `senda-analyse`, plus an additional spec for catalytic water molecules:
+
+| Spec | When to use |
+|---|---|
+| `{sequence: N, name: atomname}` | Protein residue by PDB residue number |
+| `{substrate_sequence: N, name: atomname}` | Ligand/substrate by AMBER resid in chain A |
+| `{nearest_water_to: <ref_spec>, name: atomname}` | WAT molecule whose O is closest to `ref_spec` in the representative frame |
+
+CV types supported: `distance`, `angle`, `dihedral` (map to AMBER `BOND`, `ANGLE`, `TORSION`).
+
+### QM region
+
+If `qmmask` is not set, senda selects the QM region automatically:
+
+1. Seed: all residues containing a CV atom.
+2. Expand via bond-graph (parmed) until every QM/MM boundary bond is a C-C bond.
+3. Protein backbone C-N peptide bonds are handled specially to ensure a valid cut.
+4. Net charge is estimated by summing parmed partial charges of QM atoms.
+
+Override by setting `qmmask` and `qmcharge` explicitly in the inhibitor config block.
+
+### H10 topology
+
+Hydrogen atoms in the CV definitions have their mass set to 10 amu in a modified topology (`structure_H10.parm7`). This improves sampling of light-atom CVs in the ASM. For WAT residues both hydrogens are patched even if only one appears in a CV.
 
 ---
 
@@ -501,6 +632,73 @@ slurm:
     ntasks: 1
     gres: gpu:1
     time: "5-00:00:00"
+
+  qmmm:           # senda-qmmm string jobs (equil and scan share ntasks; string scales automatically)
+    ntasks: 8               # MPI tasks for equil + scan jobs, and tasks-per-node for string
+    time: "1-00:00:00"      # wall time for equil and scan
+    time_string: "7-00:00:00"  # wall time for the string method job
+
+# ---- QM/MM string method -----------------------------------------------------
+qmmm:
+  string:
+    inhibitors:
+      LER:
+        mutants: [WT, E166V]   # subset of top-level mutants to run; omit key for all
+
+        collective_variables:
+          - type: distance        # distance | angle | dihedral
+            atoms:
+              - {sequence: 41, name: NE2}              # HIS41 NE2 (protein)
+              - {substrate_sequence: 301, name: C1}    # substrate C1 (ligand)
+          - type: distance
+            atoms:
+              - {sequence: 145, name: SG}              # CYS145 SG (protein)
+              - {nearest_water_to: {sequence: 41, name: NE2}, name: O}  # catalytic water O
+
+        guess: guesses/LER_path.dat   # initial path; interpolated to n_nodes automatically
+
+        qm_theory: DFTB3   # semiempirical level (DFTB3 | PM6 | AM1 | etc.)
+        qmcut: 12.0         # QM electrostatic cutoff in Angstroms
+
+        # Optional: override automatic QM region selection.
+        # If set, qmcharge must also be provided.
+        # qmmask: "@1-50,301-310"
+        # qmcharge: -1
+
+        extra_restraints:   # optional; appended to every restraint file
+          - atoms: [12, 34]
+            r1: 1.0
+            r2: 2.0
+            r3: 2.5
+            r4: 4.0
+            rk2: 50.0
+            rk3: 50.0
+
+        equil:              # stage 05 -- QM/MM equilibration
+          temp: 300.0
+          nstlim: 20000
+          dt: 0.001
+          gamma_ln: 5.0
+          ntpr: 50
+          ntwx: 100
+          ntwr: 100
+
+        scan:               # stage 06 -- restrained scan
+          n_nodes: 64             # number of windows; must equal string.n_nodes
+          force_constant: 100.0   # harmonic force constant (kcal/mol/A^2 or /rad^2)
+          nstlim: 5000
+          dt: 0.001
+          gamma_ln: 5.0
+
+        string:             # stage 07 -- adaptive string method
+          n_nodes: 64
+          nstlim: 50000
+          dt: 0.001
+          gamma_ln: 5.0
+          seed: 1234              # base random seed; each node gets seed + node_index
+          prep_steps: 500         # ASM preparation steps before string update
+          z_bias: false           # Fortran logical (.false. / .true.)
+          force_constant_d: 100.0 # string force constant
 ```
 
 ---

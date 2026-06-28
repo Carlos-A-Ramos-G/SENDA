@@ -571,6 +571,7 @@ def _analyse_chain(
         str(sim_base / f"replica_{best_rep}" / "04_NVT" / "structure_NVT_*.nc")
     ))
     traj_sel  = pt.load(nc_files_sel, top=str(top_path))
+    pt.autoimage(traj_sel)
     rst7_path = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"
     pt.write_traj(str(rst7_path), traj_sel[best_loc - 1:best_loc], format="rst7", overwrite=True)
     print(f"\n  Restart written: {rst7_path}")

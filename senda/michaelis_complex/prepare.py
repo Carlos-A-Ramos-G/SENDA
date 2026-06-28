@@ -172,6 +172,7 @@ def prepare(
     prot_map:          dict[tuple[str, int], str] | None = None,
     residue_renames:   list[tuple[str, str]] | None = None,
     chains:            frozenset[str] = frozenset(("A", "B")),
+    write_apo:         bool = True,
 ) -> None:
     """
     Produce inhibitor complex and APO PDBs in *output_dir*.
@@ -232,8 +233,9 @@ def prepare(
         _write_pdb(protein_body, ligand_lines,
                    output_dir / f"{mutant}_{inh_name}_dimer.pdb", chains)
 
-    # 5. APO — protein only
-    _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
+    # 5. APO — protein only (skipped when inhibitors filter excludes APO)
+    if write_apo:
+        _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +252,7 @@ def prepare_all(
     chains:               frozenset[str] = frozenset(("A", "B")),
     residue_renames:      list[tuple[str, str]] | None = None,
     force:                bool = False,
+    write_apo:            bool = True,
 ) -> None:
     """
     Run :func:`prepare` for each entry in *structures*.
@@ -294,10 +297,9 @@ def prepare_all(
         if not raw_pdb.exists():
             raise FileNotFoundError(f"Raw PDB not found: {raw_pdb}")
 
-        outputs = (
-            [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
-            + [output_dir / f"{mutant}_APO_dimer.pdb"]
-        )
+        outputs = [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
+        if write_apo:
+            outputs.append(output_dir / f"{mutant}_APO_dimer.pdb")
         if not force and all(p.exists() for p in outputs):
             log.info("[%s] already done — skipping (use --force to redo)", mutant)
             print(f"[{mutant}] already done — skipping (use --force to redo)")
@@ -309,5 +311,6 @@ def prepare_all(
             inhibitor_sources, ref_inh_lines,
             output_dir, mutant,
             prot_map, residue_renames, chains,
+            write_apo=write_apo,
         )
         print(f"[{mutant}] done → {output_dir}/")
