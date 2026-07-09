@@ -42,7 +42,7 @@ import subprocess
 from pathlib import Path
 
 from .templates import (
-    MIN, HEAT, EQUIL_NPT, EQUIL_NVT, PROD,
+    MIN, HEAT, HEAT_RESTART, EQUIL_NPT, EQUIL_NVT, PROD,
     HMR_CCPTRAJ, SPLIT_LEAP_BLOCK, make_restrainer,
     RUN_GPU_HEADER, RUN_LOCAL_HEADER,
     NVT_CLUSTER_HEADER, NVT_LOCAL_HEADER,
@@ -205,6 +205,12 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict,
         RESTRAINTMASK=restr_mask, RESTRAINT_WT=heating_wt,
         DISANG=disang,
     ))
+    (replica_dir / "02_heat" / "heat_restart.in").write_text(fill(
+        HEAT_RESTART,
+        TEMP=temp, NSTLIM=heat_steps, DT=dt,
+        RESTRAINTMASK=restr_mask, RESTRAINT_WT=heating_wt,
+        NMROPT=nmropt, WTDISANG=wtdisang,
+    ))
 
     npt_steps = int(round(float(sim["equil"]["npt_ns"]) * 1000.0 / dt))
     for cycle, wt in enumerate(equil_sched, start=1):
@@ -277,6 +283,8 @@ def _write_run_scripts(
     else:
         leap_block = "tleap -f leap_structure"
 
+    max_heat_retries = int((sim.get("heat") or {}).get("max_retries", 5))
+
     prod   = sim["production"]
     total  = int(prod["total_chunks"])
     cpj    = int(prod["chunks_per_job"])
@@ -301,6 +309,7 @@ def _write_run_scripts(
             RESTRAINER_BLOCK=restrainer_block,
             MAXCAP=sim["min"]["max_cycles_cap"],
             CONVTHRESH=sim["min"]["convergence_threshold"],
+            MAX_HEAT_RETRIES=max_heat_retries,
             TOPOLOGY=topology,
             NVT_LAUNCH="sbatch run_NVT_1.cmd",
         )
@@ -332,6 +341,7 @@ def _write_run_scripts(
             RESTRAINER_BLOCK=restrainer_block,
             MAXCAP=sim["min"]["max_cycles_cap"],
             CONVTHRESH=sim["min"]["convergence_threshold"],
+            MAX_HEAT_RETRIES=max_heat_retries,
             TOPOLOGY=topology,
             NVT_LAUNCH='bash "$DIR/04_NVT/run_NVT_1_local.sh"',
         )

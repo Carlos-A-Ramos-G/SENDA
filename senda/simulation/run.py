@@ -61,9 +61,12 @@ def main() -> None:
     p_check = sub.add_parser("check",
         help="Report completion status and first failure point for all replicas")
     p_check.add_argument("--failed", action="store_true",
-        help="Show only failed or not-started replicas")
+        help="Show only replicas that are not fully complete")
     p_check.add_argument("-v", "--verbose", action="store_true",
         help="Print the last lines of the failing output file for each failed replica")
+
+    sub.add_parser("topology_info",
+        help="Print atom, box, and ion counts from each system's parm7")
 
     args = parser.parse_args()
     cfg  = _load_config(Path(args.config))
@@ -121,3 +124,7 @@ def main() -> None:
             verbose=args.verbose,
             only_failed=args.failed,
         )
+
+    elif args.command == "topology_info":
+        from .topology import topology_info
+        topology_info(inhibitors, mutants, simulations_dir)

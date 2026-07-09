@@ -96,6 +96,19 @@ def main() -> None:
         else:
             inhibitor_sources[name] = str(cwd / source)
 
+    # Filter to only the inhibitors listed at the top level, if specified.
+    # APO is handled separately (include_apo flag) and has no inhibitor_sources entry.
+    inhibitors  = raw.get("inhibitors") or []
+    include_apo = not inhibitors or "APO" in inhibitors
+    if inhibitors:
+        ligand_inh        = [i for i in inhibitors if i != "APO"]
+        inhibitor_sources = {n: s for n, s in inhibitor_sources.items() if n in ligand_inh}
+        if ligand_inh and not inhibitor_sources:
+            sys.exit(
+                "Error: none of the inhibitors listed under 'inhibitors' match any entry "
+                "in michaelis_complex.inhibitor_sources"
+            )
+
     # Validate paths
     for path in (raw_pdbs_dir, alignment_ref_pdb, reference_enzyme_pdb):
         if not path.exists():
@@ -127,6 +140,7 @@ def main() -> None:
             chains=chains,
             residue_renames=residue_renames,
             force=args.force,
+            include_apo=include_apo,
         )
     except FileNotFoundError as exc:
         sys.exit(f"Error: {exc}")

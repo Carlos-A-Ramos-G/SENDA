@@ -90,6 +90,57 @@ def _complete_missing_residues(
     return aligned + added, added_keys
 
 
+def _trim_to_reference(
+    lines:  list[str],
+    ref:    list[str],
+    chains: frozenset[str],
+    mutant: str,
+) -> list[str]:
+    """
+    Remove ATOM records whose residue number falls outside the per-chain
+    range defined by the alignment reference.  HETATM records (ligands,
+    crystal waters) are left untouched.
+    """
+    ref_range: dict[str, tuple[int, int]] = {}
+    for line in ref:
+        if not line.startswith("ATOM  "):
+            continue
+        ch = line[21]
+        if ch not in chains:
+            continue
+        try:
+            resnum = int(line[22:26])
+        except ValueError:
+            continue
+        lo, hi = ref_range.get(ch, (resnum, resnum))
+        ref_range[ch] = (min(lo, resnum), max(hi, resnum))
+
+    result   = []
+    trimmed: dict[str, set[int]] = {ch: set() for ch in chains}
+    for line in lines:
+        if line.startswith("ATOM  "):
+            ch = line[21]
+            if ch in ref_range:
+                try:
+                    resnum = int(line[22:26])
+                except ValueError:
+                    result.append(line)
+                    continue
+                lo, hi = ref_range[ch]
+                if resnum < lo or resnum > hi:
+                    trimmed[ch].add(resnum)
+                    continue
+        result.append(line)
+
+    for ch, resnums in trimmed.items():
+        if resnums:
+            log.info("[%s] chain %s: trimmed %d residues outside reference range (%s)",
+                     mutant, ch, len(resnums), sorted(resnums))
+            print(f"  chain {ch}: trimmed residues {sorted(resnums)} (outside reference range)")
+
+    return result
+
+
 def _sort_protein_lines(lines: list[str]) -> list[str]:
     """
     Sort ATOM/ANISOU lines by residue number, preserving within-residue order.
@@ -180,6 +231,7 @@ def prepare(
     prot_map:          dict[tuple[str, int], str] | None = None,
     residue_renames:   list[tuple[str, str]] | None = None,
     chains:            frozenset[str] = frozenset(("A", "B")),
+    include_apo:       bool = True,
 ) -> None:
     """
     Produce inhibitor complex and APO PDBs in *output_dir*.
@@ -214,6 +266,11 @@ def prepare(
                      mutant, ch, len(resnums), sorted(resnums))
             print(f"  chain {ch}: filled residues {sorted(resnums)} from reference")
 
+    # 3b. Trim residues outside the reference range (some crystal structures
+    #     resolve more C-terminal residues than the reference, which would
+    #     introduce spurious charge differences between systems).
+    aligned = _trim_to_reference(aligned, alignment_ref, chains, mutant)
+
     chains_present = protein_chains(aligned, chains)
 
     # Protein body = aligned lines with all native ligands removed
@@ -240,8 +297,9 @@ def prepare(
         _write_pdb(protein_body, ligand_lines,
                    output_dir / f"{mutant}_{inh_name}_dimer.pdb", chains)
 
-    # 5. APO — protein only
-    _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
+    # 5. APO — protein only (only when requested)
+    if include_apo:
+        _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +316,7 @@ def prepare_all(
     chains:               frozenset[str] = frozenset(("A", "B")),
     residue_renames:      list[tuple[str, str]] | None = None,
     force:                bool = False,
+    include_apo:          bool = True,
 ) -> None:
     """
     Run :func:`prepare` for each entry in *structures*.
@@ -302,10 +361,9 @@ def prepare_all(
         if not raw_pdb.exists():
             raise FileNotFoundError(f"Raw PDB not found: {raw_pdb}")
 
-        outputs = (
-            [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
-            + [output_dir / f"{mutant}_APO_dimer.pdb"]
-        )
+        outputs = [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
+        if include_apo:
+            outputs.append(output_dir / f"{mutant}_APO_dimer.pdb")
         if not force and all(p.exists() for p in outputs):
             log.info("[%s] already done — skipping (use --force to redo)", mutant)
             print(f"[{mutant}] already done — skipping (use --force to redo)")
@@ -317,5 +375,6 @@ def prepare_all(
             inhibitor_sources, ref_inh_lines,
             output_dir, mutant,
             prot_map, residue_renames, chains,
+            include_apo=include_apo,
         )
         print(f"[{mutant}] done → {output_dir}/")

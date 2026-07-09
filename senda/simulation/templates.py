@@ -25,11 +25,12 @@ Initial minimization
 __WTBLOCK__"""
 
 HEAT = """\
-Stage 2 heating on GPU 1K to __TEMP__K
+Stage 2 heating on GPU 1K to __TEMP__K (NPT, Berendsen)
  &cntrl
   imin=0, irest=0, ntx=1,
   nstlim=__NSTLIM__, dt=__DT__,
-  ntb=1, ntp=0,
+  ntb=2, ntp=1, barostat=1,
+  pres0=1.0, taup=2.0,
   ntc=2, ntf=2, ntt=3,
   ntpr=1000, ntwr=1000, ntwx=1000,
   ntr=1,
@@ -44,6 +45,26 @@ Stage 2 heating on GPU 1K to __TEMP__K
 /
 &wt type='END'/
 __DISANG__"""
+
+# Restart template: NPT Berendsen at constant target temperature.
+# Used when heat.in crashes but a checkpoint rst7 was already written.
+HEAT_RESTART = """\
+Restart heating at constant temperature (NPT, Berendsen)
+ &cntrl
+  imin=0, irest=1, ntx=5,
+  nstlim=__NSTLIM__, dt=__DT__,
+  ntb=2, ntp=1, barostat=1,
+  pres0=1.0, taup=2.0,
+  ntc=2, ntf=2, ntt=3,
+  tempi=__TEMP__, temp0=__TEMP__,
+  ntpr=1000, ntwr=1000, ntwx=1000,
+  ntr=1,
+  restraintmask='__RESTRAINTMASK__',
+  restraint_wt=__RESTRAINT_WT__,
+  cut=10, gamma_ln=5.0,
+  iwrap=1, ntxo=1,__NMROPT__
+ /
+__WTDISANG__"""
 
 EQUIL_NPT = """\
 equilibration cycle __CYCLE__ (restrained NPT)
@@ -360,13 +381,30 @@ fi
 
 # -- 02_heat ------------------------------------------------------------------
 cd "$DIR/02_heat"
-log "02_heat"
-pmemd.cuda -O -i heat.in -o structure_heat.out \\
-                          -p ../00_prep/__TOPOLOGY__ \\
-                          -c "$DIR/01_min/structure_min_${min_cycles}.rst7" \\
-                          -r structure_heat.rst7 \\
-                          -x structure_heat.nc \\
-                          -ref "$DIR/01_min/structure_min_${min_cycles}.rst7"
+log "02_heat: starting (up to __MAX_HEAT_RETRIES__ attempts)"
+heat_ok=0
+for ((attempt=1; attempt<=__MAX_HEAT_RETRIES__; attempt++)); do
+    [ "${attempt}" -gt 1 ] && log "02_heat: retry ${attempt}/__MAX_HEAT_RETRIES__"
+    if [ "${attempt}" -gt 1 ] && [ -f structure_heat.rst7 ]; then
+        heat_coord="structure_heat.rst7"
+        heat_in="heat_restart.in"
+        heat_ref="structure_heat.rst7"
+    else
+        heat_coord="$DIR/01_min/structure_min_${min_cycles}.rst7"
+        heat_in="heat.in"
+        heat_ref="$DIR/01_min/structure_min_${min_cycles}.rst7"
+    fi
+    if pmemd.cuda -O -i ${heat_in} -o structure_heat.out \\
+                      -p ../00_prep/__TOPOLOGY__ \\
+                      -c ${heat_coord} \\
+                      -r structure_heat.rst7 \\
+                      -x structure_heat.nc \\
+                      -ref ${heat_ref}; then
+        heat_ok=1; break
+    fi
+    log "02_heat: attempt ${attempt} failed"
+done
+[ "${heat_ok}" -eq 1 ] || { log "ERROR: 02_heat failed after __MAX_HEAT_RETRIES__ attempts"; exit 1; }
 
 # -- 03_equil -----------------------------------------------------------------
 cd "$DIR/03_equil"
