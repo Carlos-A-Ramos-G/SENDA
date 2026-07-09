@@ -1,6 +1,18 @@
 # senda
 
-Modular Python framework for enzyme QM/MM free energy calculations.
+Pipeline for preparing, running, and analysing enzyme MD simulations as input for QM/MM free energy calculations.
+
+The full workflow goes from raw crystallographic PDB files to an equilibrated, representative snapshot ready for QM/MM: ligand parameterisation with GAFF2, Michaelis complex preparation (cleaning, alignment, protonation), AMBER MD replica setup, and pooled-trajectory analysis to select the best starting frame.
+
+## Requirements
+
+- Python >= 3.9
+- [AmberTools >= 22](https://ambermd.org/AmberTools.php) — `antechamber`, `parmchk2`, `tleap`, and `pmemd.cuda` must be in `$PATH`
+
+Optional:
+- **RDKit** — automatic net charge detection for `senda-param`
+- **ParmEd** — topology inspection via `senda-sim topology_info`
+- **scipy, matplotlib, pytraj** — trajectory analysis via `senda-analyse`
 
 ## Installation
 
@@ -8,8 +20,13 @@ Modular Python framework for enzyme QM/MM free energy calculations.
 pip install -e .
 ```
 
-**Requirements:** AmberTools >= 22 (`antechamber`, `parmchk2`, `tleap`, `pmemd.cuda` in `$PATH`).
-RDKit is recommended for automatic net charge detection.
+To include trajectory analysis dependencies:
+
+```bash
+pip install -e ".[analysis]"
+```
+
+RDKit is best installed via conda:
 
 ```bash
 conda install -c conda-forge rdkit
@@ -26,10 +43,10 @@ ligand PDBs       ->  senda-param   ->  GAFF parameters
                                                   |
                        senda-sim    ->  AMBER MD replicas
                                                   |
-                       senda-pmf    ->  free energy profiles  (planned)
+                       senda-analyse ->  representative frame for QM/MM
 ```
 
-On an HPC cluster, use `senda-slurm` to generate and chain all SLURM scripts automatically.
+On an HPC cluster, use `senda-slurm` to chain all jobs automatically.
 
 ---
 
@@ -371,7 +388,7 @@ The penalty is added to the distance-deviation score (lower = better), so a valu
 ### Requirements
 
 ```bash
-pip install senda[analysis]   # installs scipy, matplotlib, pytraj
+pip install -e ".[analysis]"   # installs scipy, matplotlib, pytraj
 ```
 
 ---
