@@ -45,7 +45,7 @@ On an HPC cluster, use `senda-slurm` to generate and chain all SLURM scripts aut
 |---|---|
 | `senda-param` | Parameterize ligands with GAFF2 (AM1-BCC or RESP charges) |
 | `senda-complex` | Prepare curated protein-ligand dimer PDBs from raw crystal structures |
-| `senda-sim` | Generate AMBER MD replica directories and optionally submit jobs |
+| `senda-sim` | Generate AMBER MD replica directories, submit jobs, check run status, or inspect topology |
 | `senda-slurm` | Generate a chained SLURM workflow script for the full pipeline |
 | `senda-analyse` | Analyse reactive distances from NVT trajectories and select a representative frame for QM/MM |
 | `senda-qmmm string equil` | Stage 05: set up and optionally submit the QM/MM equilibration job |
@@ -159,21 +159,14 @@ senda-complex --config config.yaml --force   # re-run even if outputs exist
 
 ### Filtering by inhibitors and mutants
 
-Both filters are optional and mirror each other:
+`senda-complex` respects both top-level lists:
 
-```yaml
-inhibitors:    # optional -- omit or leave empty to process all entries in inhibitor_sources
-  - LER
-  - NIR
+- **`inhibitors:`** — only inhibitors listed here are prepared. `APO` is a special value: include it to also write protein-only (APO) PDB files; omit it to skip APO output entirely. If `inhibitors:` is absent or empty, all entries in `michaelis_complex.inhibitor_sources` are processed and APO files are always written.
+- **`mutants:`** — only structures whose mapped mutant name appears here are processed. Remove or leave empty to process all structures.
 
-mutants:       # optional -- omit or leave empty to process all structures
-  - WT
-  - E166V
-```
+### Residue trimming
 
-If `inhibitors:` is set, only the matching keys from `michaelis_complex.inhibitor_sources` are written as output PDBs. If absent or empty, all entries in `inhibitor_sources` are used.
-
-If `mutants:` is set, only structures whose mapped mutant name appears in the list are processed. If absent or empty, all entries in `michaelis_complex.structures` are processed.
+After alignment, each chain is clipped to the residue number range of the alignment reference. This prevents crystal structures that resolve extra C-terminal (or N-terminal) residues from introducing spurious charge differences between systems.
 
 ---
 
@@ -212,13 +205,71 @@ senda-sim --config config.yaml setup --mode local
 senda-sim --config config.yaml submit
 ```
 
+### Check simulation status
+
+```bash
+# Report progress for every replica
+senda-sim --config config.yaml check
+
+# Show only replicas that are not fully complete
+senda-sim --config config.yaml check --failed
+
+# Also print the last lines of the in-progress output file
+senda-sim --config config.yaml check --failed -v
+```
+
+Output shows two columns per replica: **Completed** (last stage with the AMBER completion marker) and **In progress** (stage currently running or interrupted). A truncated `.out` file is never labelled "failed" — it may belong to a still-running job.
+
+```
+  System               Completed              In progress
+  -------------------------------------------------------
+  LER/WT/replica_1     03_equil  6/6          04_NVT  3/20
+  LER/WT/replica_2     04_NVT   20/20         --
+  LER/WT/replica_3     02_heat  200000 steps  03_equil  2/6
+  LER/WT/replica_4     --                     --
+```
+
+### Topology info
+
+```bash
+senda-sim --config config.yaml topology_info
+```
+
+Reads `replica_1/00_prep/structure.parm7` for each (inhibitor, mutant) pair and prints a table of atom count, box dimensions, water count, Na+, Cl-, and the net charge of the solute (protein + ligand, excluding water and ions). Useful for verifying that ion placement is consistent across systems. Requires ParmEd (`pip install parmed` or load AmberTools).
+
+### Simulation protocol
+
+The MD protocol applied to each replica is:
+
+| Stage | Type | Details |
+|---|---|---|
+| `00_prep` | tleap | Solvation, ion placement, HMR |
+| `01_min` | Minimization | Convergence-based loop, up to `max_cycles_cap` |
+| `02_heat` | NPT (Berendsen) | 1 K to target temperature; retry loop on crash |
+| `03_equil` | NPT (MC) -> NVT | 5 restrained NPT cycles + 1 unrestrained NVT |
+| `04_NVT` | NVT | Production, chained chunks |
+
+Heating uses the Berendsen barostat (`barostat=1`) for stability during the far-from-equilibrium temperature ramp, then switches to the Monte Carlo barostat for equilibration. If heating crashes, the run script retries automatically (up to `heat.max_retries` attempts), restarting from the last written checkpoint if one exists.
+
+### Ion placement -- SPLIT method
+
+By default, senda neutralises the system with `addions Na+ 0`. To add NaCl at a specific concentration using the SPLIT method (Machado & Pantano, *J. Chem. Theory Comput.* 2020), set `leap.salt_molarity` in the config:
+
+```yaml
+amber_simulator:
+  leap:
+    salt_molarity: 0.150   # mol/L
+```
+
+This triggers a two-pass tleap scheme: pass 1 determines the solute charge and the number of solvation waters; the run script computes the exact Na+/Cl- counts at the target molarity and substitutes them before pass 2 builds the final system.
+
 ### Restraints
 
 Two types of restraints are supported, both optional:
 
 **Positional restraints** -- backbone atoms held during heating and NPT equilibration. The mask, heating weight, and per-cycle schedule are configurable.
 
-**NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Defined as a list of atom specs in the config.
+**NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Must be a dict keyed by inhibitor name; each inhibitor's restraints are applied only to that inhibitor's topology. Omit an inhibitor's key (or set it to `[]`) for no NMR restraints for that ligand.
 
 ---
 
@@ -529,8 +580,13 @@ amber_simulator:
     max_cycles_cap: 100
     convergence_threshold: 3.0e-3
 
+  leap:
+    salt_molarity: 0.150   # NaCl concentration (mol/L); uses SPLIT method (Machado & Pantano, JCTC 2020)
+                           # omit or set to 0 for neutralisation-only (addions Na+ 0)
+
   heat:
     ps: 200
+    max_retries: 5         # retry heating on crash, restarting from last checkpoint
 
   equil:
     npt_ns: 1.25
@@ -548,8 +604,9 @@ amber_simulator:
       heating_weight: 20.0                           # kcal/mol/A^2
       equil_schedule: [15.0, 12.0, 9.0, 6.0, 3.0]  # one value per NPT cycle
 
-    # NMR restraints (distance, angle, dihedral). Keyed by inhibitor name so
-    # each ligand can have different restraints (or none -- omit the key).
+    # NMR restraints (distance, angle, dihedral). Must be a dict keyed by
+    # inhibitor name -- each inhibitor's restraints are applied only to that
+    # inhibitor's topology. Omit the key or set it to [] for no restraints.
     # atoms: list of {residue: <resname>, name: <atomname>}
     # 2 atoms = distance, 3 = angle, 4 = dihedral
     # Add index: <n> (0-based) for cross-residue atoms with multiple matches.
@@ -567,7 +624,7 @@ amber_simulator:
           r4:  20.0
           rk2: 500
           rk3: 500
-      # NIR: []  # no NMR restraints for NIR -- omit the key or leave empty
+      NIR: []   # no NMR restraints for NIR
 
 # ---- Analysis ----------------------------------------------------------------
 analysis:

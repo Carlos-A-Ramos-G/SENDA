@@ -109,12 +109,7 @@ def _launch_script(slurm: dict, config: str, out_dir: str, force: bool = False) 
     force_flag = " --force" if force else ""
     body = f"""\
 senda-sim --config {config} setup{force_flag}
-
-echo "Submitting replica GPU jobs..."
-for run_gpu in simulations/*/*/replica_*/run_gpu; do
-    jid=$(sbatch --parsable "$run_gpu")
-    echo "  $run_gpu -> job $jid"
-done
+senda-sim --config {config} submit
 """
     return head + body
 

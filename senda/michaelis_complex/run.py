@@ -96,15 +96,14 @@ def main() -> None:
         else:
             inhibitor_sources[name] = str(cwd / source)
 
-    # Filter by top-level inhibitors list if specified
-    inhibitors = raw.get("inhibitors") or []
-    # APO is written only when inhibitors list is absent/empty (process all)
-    # or when APO is explicitly included in the list.
-    write_apo = not inhibitors or "APO" in inhibitors
+    # Filter to only the inhibitors listed at the top level, if specified.
+    # APO is handled separately (include_apo flag) and has no inhibitor_sources entry.
+    inhibitors  = raw.get("inhibitors") or []
+    include_apo = not inhibitors or "APO" in inhibitors
     if inhibitors:
-        inhibitor_sources = {k: v for k, v in inhibitor_sources.items()
-                             if k in inhibitors and k != "APO"}
-        if not inhibitor_sources and not write_apo:
+        ligand_inh        = [i for i in inhibitors if i != "APO"]
+        inhibitor_sources = {n: s for n, s in inhibitor_sources.items() if n in ligand_inh}
+        if ligand_inh and not inhibitor_sources:
             sys.exit(
                 "Error: none of the inhibitors listed under 'inhibitors' match any entry "
                 "in michaelis_complex.inhibitor_sources"
@@ -141,7 +140,7 @@ def main() -> None:
             chains=chains,
             residue_renames=residue_renames,
             force=args.force,
-            write_apo=write_apo,
+            include_apo=include_apo,
         )
     except FileNotFoundError as exc:
         sys.exit(f"Error: {exc}")

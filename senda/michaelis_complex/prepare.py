@@ -90,6 +90,57 @@ def _complete_missing_residues(
     return aligned + added, added_keys
 
 
+def _trim_to_reference(
+    lines:  list[str],
+    ref:    list[str],
+    chains: frozenset[str],
+    mutant: str,
+) -> list[str]:
+    """
+    Remove ATOM records whose residue number falls outside the per-chain
+    range defined by the alignment reference.  HETATM records (ligands,
+    crystal waters) are left untouched.
+    """
+    ref_range: dict[str, tuple[int, int]] = {}
+    for line in ref:
+        if not line.startswith("ATOM  "):
+            continue
+        ch = line[21]
+        if ch not in chains:
+            continue
+        try:
+            resnum = int(line[22:26])
+        except ValueError:
+            continue
+        lo, hi = ref_range.get(ch, (resnum, resnum))
+        ref_range[ch] = (min(lo, resnum), max(hi, resnum))
+
+    result   = []
+    trimmed: dict[str, set[int]] = {ch: set() for ch in chains}
+    for line in lines:
+        if line.startswith("ATOM  "):
+            ch = line[21]
+            if ch in ref_range:
+                try:
+                    resnum = int(line[22:26])
+                except ValueError:
+                    result.append(line)
+                    continue
+                lo, hi = ref_range[ch]
+                if resnum < lo or resnum > hi:
+                    trimmed[ch].add(resnum)
+                    continue
+        result.append(line)
+
+    for ch, resnums in trimmed.items():
+        if resnums:
+            log.info("[%s] chain %s: trimmed %d residues outside reference range (%s)",
+                     mutant, ch, len(resnums), sorted(resnums))
+            print(f"  chain {ch}: trimmed residues {sorted(resnums)} (outside reference range)")
+
+    return result
+
+
 def _sort_protein_lines(lines: list[str]) -> list[str]:
     """
     Sort ATOM/ANISOU lines by residue number, preserving within-residue order.
@@ -113,30 +164,25 @@ def _write_pdb(
     chains:       frozenset[str],
 ) -> None:
     """
-    Write a PDB file with TER records between protein chains.
+    Write a PDB file ordered as:
+      protein chain A  ->  TER
+      protein chain B  ->  TER
+      inhibitor chain A  ->  TER
+      inhibitor chain B  ->  TER
+      water  ->  TER
 
-    Output order:
-      <header records>
-      <chain A ATOM/ANISOU — sorted by residue number>
-      TER
-      <chain B ATOM/ANISOU — sorted by residue number>   (omitted when absent)
-      TER
-      <ligand HETATM/ANISOU>
-      <water HETATM/ANISOU>
-      TER
-
-    tleap requires TER between chains; without it it tries to bond the
-    C-terminus of chain A to the N-terminus of chain B.
+    ANISOU records are dropped throughout (protein, ligand, and water).
+    tleap requires TER between chains and between ligand copies.
     """
     header: list[str]            = []
     prot:   dict[str, list[str]] = {ch: [] for ch in chains}
     water:  list[str]            = []
 
     for line in body:
-        if line.startswith(("TER", "END")):
+        if line.startswith(("TER", "END", "ANISOU")):
             continue
         rec = line[:6]
-        if rec in ("ATOM  ", "ANISOU"):
+        if rec == "ATOM  ":
             ch = line[21]
             if ch in prot:
                 prot[ch].append(line)
@@ -151,7 +197,20 @@ def _write_pdb(
         if prot[ch]:
             out.extend(_sort_protein_lines(prot[ch]))
             out.append("TER\n")
-    out.extend(ligand_lines)
+
+    prev_ch = None
+    for line in ligand_lines:
+        if line[:6] == "ANISOU":
+            continue
+        if line[:6] == "HETATM":
+            ch = line[21]
+            if prev_ch is not None and ch != prev_ch:
+                out.append("TER\n")
+            prev_ch = ch
+        out.append(line)
+    if prev_ch is not None:
+        out.append("TER\n")
+
     out.extend(water)
     out.append("TER\n")
 
@@ -172,7 +231,7 @@ def prepare(
     prot_map:          dict[tuple[str, int], str] | None = None,
     residue_renames:   list[tuple[str, str]] | None = None,
     chains:            frozenset[str] = frozenset(("A", "B")),
-    write_apo:         bool = True,
+    include_apo:       bool = True,
 ) -> None:
     """
     Produce inhibitor complex and APO PDBs in *output_dir*.
@@ -207,6 +266,11 @@ def prepare(
                      mutant, ch, len(resnums), sorted(resnums))
             print(f"  chain {ch}: filled residues {sorted(resnums)} from reference")
 
+    # 3b. Trim residues outside the reference range (some crystal structures
+    #     resolve more C-terminal residues than the reference, which would
+    #     introduce spurious charge differences between systems).
+    aligned = _trim_to_reference(aligned, alignment_ref, chains, mutant)
+
     chains_present = protein_chains(aligned, chains)
 
     # Protein body = aligned lines with all native ligands removed
@@ -233,8 +297,8 @@ def prepare(
         _write_pdb(protein_body, ligand_lines,
                    output_dir / f"{mutant}_{inh_name}_dimer.pdb", chains)
 
-    # 5. APO — protein only (skipped when inhibitors filter excludes APO)
-    if write_apo:
+    # 5. APO — protein only (only when requested)
+    if include_apo:
         _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
 
 
@@ -252,7 +316,7 @@ def prepare_all(
     chains:               frozenset[str] = frozenset(("A", "B")),
     residue_renames:      list[tuple[str, str]] | None = None,
     force:                bool = False,
-    write_apo:            bool = True,
+    include_apo:          bool = True,
 ) -> None:
     """
     Run :func:`prepare` for each entry in *structures*.
@@ -298,7 +362,7 @@ def prepare_all(
             raise FileNotFoundError(f"Raw PDB not found: {raw_pdb}")
 
         outputs = [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
-        if write_apo:
+        if include_apo:
             outputs.append(output_dir / f"{mutant}_APO_dimer.pdb")
         if not force and all(p.exists() for p in outputs):
             log.info("[%s] already done — skipping (use --force to redo)", mutant)
@@ -311,6 +375,6 @@ def prepare_all(
             inhibitor_sources, ref_inh_lines,
             output_dir, mutant,
             prot_map, residue_renames, chains,
-            write_apo=write_apo,
+            include_apo=include_apo,
         )
         print(f"[{mutant}] done → {output_dir}/")
