@@ -50,7 +50,7 @@ equilibration cycle __CYCLE__ (restrained NPT)
  &cntrl
   imin=0, irest=1, ntx=5,
   nstlim=__NSTLIM__, dt=__DT__,
-  ntb=2, ntp=1,
+  ntb=2, ntp=1, barostat=2,
   ntc=2, ntf=2, ntt=3,
   tempi=__TEMP__, temp0=__TEMP__,
   ntpr=1000, ntwx=1000,
@@ -96,6 +96,32 @@ hmassrepartition dowater
 parmwrite out structure_HMR.parm7
 quit
 """
+
+# Two-pass tleap block for the SPLIT ion-placement method.
+# Placeholders __PDB_NAME__ and __MOLARITY__ are filled at setup time;
+# ${NWATER}, ${Q}, etc. are bash variables expanded at job runtime.
+# Ref: Machado & Pantano, J. Chem. Theory Comput. 2020, doi:10.1021/acs.jctc.9b00953
+SPLIT_LEAP_BLOCK = """\
+# Pass 1: count solute charge and solvation waters
+tleap -f leap_count > leap_count.log 2>&1
+
+Q=$(grep "Total unperturbed charge" leap_count.log | awk '{printf "%.0f", $NF}')
+NWATER_SOL=$(grep "Added [0-9]* residues" leap_count.log | tail -1 | awk '{print $2}')
+NWATER_XTAL=$(awk '($1=="ATOM"||$1=="HETATM") && ($4=="HOH"||$4=="WAT") && ($3=="O"||$3=="OW")' \\
+              __PDB_NAME__ | wc -l | tr -d ' ')
+NWATER=$((NWATER_SOL + NWATER_XTAL))
+
+# SPLIT method: No=Nw*Co/56; N+=ceil(No-Q/2); N-=ceil(No+Q/2)
+NPOS=$(awk "BEGIN { x=${NWATER}*__MOLARITY__/56 - ${Q}/2.0; printf \\"%d\\", (x>int(x))?int(x)+1:int(x) }")
+NNEG=$(awk "BEGIN { x=${NWATER}*__MOLARITY__/56 + ${Q}/2.0; printf \\"%d\\", (x>int(x))?int(x)+1:int(x) }")
+
+sed -e "s/NPOS/${NPOS}/g" \\
+    -e "s/NNEG/${NNEG}/g" \\
+    leap_structure_tmpl > leap_structure
+rm leap_count.log
+
+# Pass 2: build solvated system with correct NaCl concentration
+tleap -f leap_structure"""
 
 # ---------------------------------------------------------------------------
 # NMR restraint script generator
@@ -294,7 +320,7 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 # -- 00_prep ------------------------------------------------------------------
 cd "$DIR/00_prep"
 log "00_prep: tleap"
-tleap -f leap_structure
+__LEAP_BLOCK__
 __HMR_BLOCK__
 __RESTRAINER_BLOCK__
 # -- 01_min -------------------------------------------------------------------

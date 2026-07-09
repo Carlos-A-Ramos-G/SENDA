@@ -83,6 +83,7 @@ def _build_substrate_chain_map(
     top_atoms:           list,
     top_path:            Path,
     sim_base:            Path,
+    coords:              "np.ndarray | None" = None,
 ) -> dict:
     """
     For every chain, assign the correct substrate copy by geometric proximity.
@@ -94,16 +95,18 @@ def _build_substrate_chain_map(
     substrate_A_set:     user-declared 1-based AMBER resids (keys in the returned map)
     all_substrate_amber: all substrate copies found in the topology (by residue name)
     sequence_specs:      [{"pdb_resnum": N, "name": aname}, ...] -- protein reference atoms
+    coords:              optional pre-loaded coordinate array (n_atoms, 3); if None,
+                         frame 0 of the first NVT trajectory in sim_base is used.
     """
-    import pytraj as pt
-
-    nc_files = sorted(glob.glob(str(sim_base / "replica_1" / "04_NVT" / "structure_NVT_*.nc")))
-    if not nc_files:
-        raise FileNotFoundError(
-            f"No NVT trajectories found in {sim_base / 'replica_1' / '04_NVT'}; "
-            "cannot perform geometric substrate assignment"
-        )
-    coords = pt.load(nc_files[0], top=str(top_path), frame_indices=[0]).xyz[0]
+    if coords is None:
+        import pytraj as pt
+        nc_files = sorted(glob.glob(str(sim_base / "replica_1" / "04_NVT" / "structure_NVT_*.nc")))
+        if not nc_files:
+            raise FileNotFoundError(
+                f"No NVT trajectories found in {sim_base / 'replica_1' / '04_NVT'}; "
+                "cannot perform geometric substrate assignment"
+            )
+        coords = pt.load(nc_files[0], top=str(top_path), frame_indices=[0]).xyz[0]
 
     cand_coords: dict = {
         ar: coords[[a.index for a in top_atoms if a.resid + 1 == ar]]
@@ -573,6 +576,10 @@ def _analyse_chain(
     traj_sel  = pt.load(nc_files_sel, top=str(top_path))
     rst7_path = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"
     pt.write_traj(str(rst7_path), traj_sel[best_loc - 1:best_loc], format="rst7", overwrite=True)
+    # pytraj appends .1 for rst7 format; rename to the plain .rst7 path
+    rst7_numbered = Path(str(rst7_path) + ".1")
+    if rst7_numbered.exists():
+        rst7_numbered.rename(rst7_path)
     print(f"\n  Restart written: {rst7_path}")
 
     # --- Save distances CSV ---

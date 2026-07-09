@@ -113,30 +113,25 @@ def _write_pdb(
     chains:       frozenset[str],
 ) -> None:
     """
-    Write a PDB file with TER records between protein chains.
+    Write a PDB file ordered as:
+      protein chain A  ->  TER
+      protein chain B  ->  TER
+      inhibitor chain A  ->  TER
+      inhibitor chain B  ->  TER
+      water  ->  TER
 
-    Output order:
-      <header records>
-      <chain A ATOM/ANISOU — sorted by residue number>
-      TER
-      <chain B ATOM/ANISOU — sorted by residue number>   (omitted when absent)
-      TER
-      <ligand HETATM/ANISOU>
-      <water HETATM/ANISOU>
-      TER
-
-    tleap requires TER between chains; without it it tries to bond the
-    C-terminus of chain A to the N-terminus of chain B.
+    ANISOU records are dropped throughout (protein, ligand, and water).
+    tleap requires TER between chains and between ligand copies.
     """
     header: list[str]            = []
     prot:   dict[str, list[str]] = {ch: [] for ch in chains}
     water:  list[str]            = []
 
     for line in body:
-        if line.startswith(("TER", "END")):
+        if line.startswith(("TER", "END", "ANISOU")):
             continue
         rec = line[:6]
-        if rec in ("ATOM  ", "ANISOU"):
+        if rec == "ATOM  ":
             ch = line[21]
             if ch in prot:
                 prot[ch].append(line)
@@ -151,7 +146,20 @@ def _write_pdb(
         if prot[ch]:
             out.extend(_sort_protein_lines(prot[ch]))
             out.append("TER\n")
-    out.extend(ligand_lines)
+
+    prev_ch = None
+    for line in ligand_lines:
+        if line[:6] == "ANISOU":
+            continue
+        if line[:6] == "HETATM":
+            ch = line[21]
+            if prev_ch is not None and ch != prev_ch:
+                out.append("TER\n")
+            prev_ch = ch
+        out.append(line)
+    if prev_ch is not None:
+        out.append("TER\n")
+
     out.extend(water)
     out.append("TER\n")
 

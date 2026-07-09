@@ -29,8 +29,9 @@ Restraints
   NMR restraints (distance, angle, dihedral) are optional. When present in
   amber_simulator.restraints.nmr, a restrainer.py script is generated that
   builds the AMBER DISANG file at job time after tleap creates the topology.
-  nmr may be a plain list (applies to every ligand) or a dict keyed by
-  inhibitor name (per-ligand restraints).
+  nmr must be a dict keyed by inhibitor name; only that inhibitor's restraints
+  are applied. Omit an inhibitor's key (or set it to an empty list) for no
+  NMR restraints for that ligand.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ from pathlib import Path
 
 from .templates import (
     MIN, HEAT, EQUIL_NPT, EQUIL_NVT, PROD,
-    HMR_CCPTRAJ, make_restrainer,
+    HMR_CCPTRAJ, SPLIT_LEAP_BLOCK, make_restrainer,
     RUN_GPU_HEADER, RUN_LOCAL_HEADER,
     NVT_CLUSTER_HEADER, NVT_LOCAL_HEADER,
     RUN_BODY, NVT_JOB_BODY,
@@ -60,7 +61,8 @@ _DEFAULT_EQUIL_SCHEDULE     = [15.0, 12.0, 9.0, 6.0, 3.0]
 # tleap input
 # ---------------------------------------------------------------------------
 
-def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> str:
+def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
+                 split: bool = False) -> str:
     """
     Build the tleap input file.
 
@@ -73,13 +75,16 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> str:
           ions: ["Na+ 0", "Cl- 0"]
           box_type: TIP3PBOX
           box_size: 12
+          salt_molarity: 0.150   # enables SPLIT two-pass ion placement
+
+    When split=True, the file is written as leap_structure_tmpl with NPOS/NNEG
+    placeholders that the run script fills at job time after the SPLIT calculation.
     """
     default_ff = ["leaprc.protein.ff14SB", "leaprc.water.tip3p"]
     if has_ligand:
         default_ff.append("leaprc.gaff2")
 
     forcefields = leap_cfg.get("forcefields", default_ff)
-    ions        = leap_cfg.get("ions", ["Na+ 0"])
     box_type    = leap_cfg.get("box_type", "TIP3PBOX")
     box_size    = leap_cfg.get("box_size", 12)
 
@@ -92,10 +97,41 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> str:
         ]
 
     lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
-    for ion in ions:
-        lines.append(f"addions structure {ion}")
-    lines.append(f"solvatebox structure {box_type} {box_size}")
+
+    if split:
+        lines.append(f"solvatebox structure {box_type} {box_size}")
+        lines.append("addions structure Na+ NPOS")
+        lines.append("addions structure Cl- NNEG")
+    else:
+        ions = leap_cfg.get("ions", ["Na+ 0"])
+        for ion in ions:
+            lines.append(f"addions structure {ion}")
+        lines.append(f"solvatebox structure {box_type} {box_size}")
+
     lines.append("saveamberparm structure structure.parm7 structure.rst7")
+    lines.append("quit")
+    return "\n".join(lines) + "\n"
+
+
+def _render_leap_count(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> str:
+    """Pass-1 tleap for SPLIT: solvate and report charge only — no addions, no saveamberparm."""
+    default_ff = ["leaprc.protein.ff14SB", "leaprc.water.tip3p"]
+    if has_ligand:
+        default_ff.append("leaprc.gaff2")
+
+    forcefields = leap_cfg.get("forcefields", default_ff)
+    box_type    = leap_cfg.get("box_type", "TIP3PBOX")
+    box_size    = leap_cfg.get("box_size", 12)
+
+    lines = [f"source {ff}" for ff in forcefields]
+    if has_ligand:
+        lines += [
+            f"loadoff {inh}.lib",
+            f"loadamberparams {inh}.frcmod",
+        ]
+    lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
+    lines.append("charge structure")
+    lines.append(f"solvatebox structure {box_type} {box_size}")
     lines.append("quit")
     return "\n".join(lines) + "\n"
 
@@ -105,18 +141,28 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _get_nmr_list(sim: dict, inh: str, has_ligand: bool) -> list:
-    """Return the NMR restraint list for *inh*, supporting both formats:
-      - list  -> applies to every ligand (legacy)
-      - dict  -> keyed by inhibitor name (per-ligand)
+    """Return the NMR restraint list for *inh*.
+
+    amber_simulator.restraints.nmr must be a dict keyed by inhibitor name:
+
+      nmr:
+        LER:
+          - type: dihedral
+            ...
+        NIR: []        # empty list or omit the key entirely for no restraints
     """
     if not has_ligand:
         return []
     raw = (sim.get("restraints") or {}).get("nmr")
     if not raw:
         return []
-    if isinstance(raw, dict):
-        return raw.get(inh) or []
-    return raw  # plain list: same restraints for all ligands
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "amber_simulator.restraints.nmr must be a dict keyed by inhibitor "
+            "name (e.g. 'LER:', 'NIR:'). A flat list would apply the same "
+            "restraints to every inhibitor, which is almost certainly wrong."
+        )
+    return raw.get(inh) or []
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +269,14 @@ def _write_run_scripts(
         if has_nmr else ""
     )
 
+    leap_cfg      = sim.get("leap") or {}
+    salt_molarity = float(leap_cfg.get("salt_molarity", 0))
+    if salt_molarity:
+        pdb_name   = f"{mut}_{inh}_dimer.pdb"
+        leap_block = fill(SPLIT_LEAP_BLOCK, PDB_NAME=pdb_name, MOLARITY=salt_molarity)
+    else:
+        leap_block = "tleap -f leap_structure"
+
     prod   = sim["production"]
     total  = int(prod["total_chunks"])
     cpj    = int(prod["chunks_per_job"])
@@ -242,6 +296,7 @@ def _write_run_scripts(
             REPLICA_DIR=str(replica_dir.resolve()),
         )
         body = fill(RUN_BODY,
+            LEAP_BLOCK=leap_block,
             HMR_BLOCK=hmr_block,
             RESTRAINER_BLOCK=restrainer_block,
             MAXCAP=sim["min"]["max_cycles_cap"],
@@ -272,6 +327,7 @@ def _write_run_scripts(
 
         header = fill(RUN_LOCAL_HEADER, AMBER_SETUP=amber_setup)
         body   = fill(RUN_BODY,
+            LEAP_BLOCK=leap_block,
             HMR_BLOCK=hmr_block,
             RESTRAINER_BLOCK=restrainer_block,
             MAXCAP=sim["min"]["max_cycles_cap"],
@@ -340,10 +396,19 @@ def setup_replica(
             shutil.copy(src, replica_dir / "00_prep" / src.name)
 
     # tleap input
-    leap_cfg = sim.get("leap") or {}
-    (replica_dir / "00_prep" / "leap_structure").write_text(
-        _render_leap(inh, mut, has_ligand, leap_cfg)
-    )
+    leap_cfg      = sim.get("leap") or {}
+    salt_molarity = float(leap_cfg.get("salt_molarity", 0))
+    if salt_molarity:
+        (replica_dir / "00_prep" / "leap_count").write_text(
+            _render_leap_count(inh, mut, has_ligand, leap_cfg)
+        )
+        (replica_dir / "00_prep" / "leap_structure_tmpl").write_text(
+            _render_leap(inh, mut, has_ligand, leap_cfg, split=True)
+        )
+    else:
+        (replica_dir / "00_prep" / "leap_structure").write_text(
+            _render_leap(inh, mut, has_ligand, leap_cfg)
+        )
 
     # HMR cpptraj script
     if sim.get("use_hmr", True):

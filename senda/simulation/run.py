@@ -58,6 +58,13 @@ def main() -> None:
     p_submit.add_argument("--mode", choices=["cluster", "local"], default=None,
         help="Must match the mode used during setup")
 
+    p_check = sub.add_parser("check",
+        help="Report completion status and first failure point for all replicas")
+    p_check.add_argument("--failed", action="store_true",
+        help="Show only failed or not-started replicas")
+    p_check.add_argument("-v", "--verbose", action="store_true",
+        help="Print the last lines of the failing output file for each failed replica")
+
     args = parser.parse_args()
     cfg  = _load_config(Path(args.config))
     cwd  = Path.cwd()
@@ -76,7 +83,7 @@ def main() -> None:
 
     # Resolve mode: CLI flag > config execution_mode > default cluster
     cfg_mode = sim.get("execution_mode", "cluster")
-    mode     = args.mode or cfg_mode
+    mode     = getattr(args, "mode", None) or cfg_mode
 
     mc_cfg          = cfg.get("michaelis_complex") or {}
     protein_dir     = cwd / mc_cfg.get("output_dir", "protein")
@@ -105,3 +112,12 @@ def main() -> None:
 
     elif args.command == "submit":
         submit_all(inhibitors, mutants, n_replicas, simulations_dir, mode=mode)
+
+    elif args.command == "check":
+        from .check import check_all
+        check_all(
+            inhibitors, mutants, n_replicas,
+            sim, simulations_dir,
+            verbose=args.verbose,
+            only_failed=args.failed,
+        )
