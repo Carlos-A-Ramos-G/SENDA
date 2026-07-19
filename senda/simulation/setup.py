@@ -76,6 +76,9 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
           box_type: TIP3PBOX
           box_size: 12
           salt_molarity: 0.150   # enables SPLIT two-pass ion placement
+          extra_libs:            # cofactors or other molecules with custom parameters
+            - /path/to/COFAC.lib
+            - /path/to/COFAC.frcmod
 
     When split=True, the file is written as leap_structure_tmpl with NPOS/NNEG
     placeholders that the run script fills at job time after the SPLIT calculation.
@@ -95,6 +98,13 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
             f"loadoff {inh}.lib",
             f"loadamberparams {inh}.frcmod",
         ]
+
+    for path_str in leap_cfg.get("extra_libs", []):
+        fname = Path(path_str).name
+        if fname.endswith(".lib"):
+            lines.append(f"loadoff {fname}")
+        elif fname.endswith(".frcmod"):
+            lines.append(f"loadamberparams {fname}")
 
     lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
 
@@ -129,6 +139,14 @@ def _render_leap_count(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> 
             f"loadoff {inh}.lib",
             f"loadamberparams {inh}.frcmod",
         ]
+
+    for path_str in leap_cfg.get("extra_libs", []):
+        fname = Path(path_str).name
+        if fname.endswith(".lib"):
+            lines.append(f"loadoff {fname}")
+        elif fname.endswith(".frcmod"):
+            lines.append(f"loadamberparams {fname}")
+
     lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
     lines.append("charge structure")
     lines.append(f"solvatebox structure {box_type} {box_size}")
@@ -405,8 +423,15 @@ def setup_replica(
                 )
             shutil.copy(src, replica_dir / "00_prep" / src.name)
 
+    # Extra lib/frcmod files (cofactors, modified residues, etc.)
+    leap_cfg = sim.get("leap") or {}
+    for path_str in leap_cfg.get("extra_libs", []):
+        src = Path(path_str)
+        if not src.exists():
+            raise FileNotFoundError(f"Extra lib/frcmod not found: {src}")
+        shutil.copy(src, replica_dir / "00_prep" / src.name)
+
     # tleap input
-    leap_cfg      = sim.get("leap") or {}
     salt_molarity = float(leap_cfg.get("salt_molarity", 0))
     if salt_molarity:
         (replica_dir / "00_prep" / "leap_count").write_text(
