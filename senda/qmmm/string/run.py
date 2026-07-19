@@ -3,11 +3,13 @@ senda.qmmm.string.run
 
 Entry point for `senda-qmmm string` subcommands:
   equil   -- stage 05: QM/MM equilibration setup
+  prod    -- stage 05_QMMM_restraint_free: optional unrestrained QM/MM production
   scan    -- stage 06: restrained scan setup
   string  -- stage 07: adaptive string method setup
 
 Usage:
   senda-qmmm string equil  [-s] [-i INH] [-m MUT] [config.yaml]
+  senda-qmmm string prod   [-s] [-a JOBID] [-i INH] [-m MUT] [config.yaml]
   senda-qmmm string scan   [-s] [-a JOBID] [-i INH] [-m MUT] [config.yaml]
   senda-qmmm string string [-s] [-a JOBID] [-i INH] [-m MUT] [config.yaml]
 """
@@ -52,6 +54,15 @@ def main_equil(args):
         setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit)
 
 
+def main_prod(args):
+    from .prod import setup
+    cfg = _load_config(args.config)
+    cwd = args.config.parent
+    for inh, mut, inh_cfg in _iter_pairs(cfg, args.inh, args.mut):
+        print(f"\n[prod] {inh}/{mut}")
+        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after)
+
+
 def main_scan(args):
     from .scan import setup
     cfg = _load_config(args.config)
@@ -91,6 +102,11 @@ def main(argv=None):
     p_equil = sub.add_parser("equil",  help="Stage 05: QM/MM equilibration")
     _add_common(p_equil)
 
+    p_prod  = sub.add_parser("prod",   help="Stage 05_QMMM_restraint_free: optional unrestrained production")
+    _add_common(p_prod)
+    p_prod.add_argument("-a", "--after", default=None, metavar="JOBID",
+                        help="SLURM dependency: afterok:<JOBID>")
+
     p_scan  = sub.add_parser("scan",   help="Stage 06: restrained scan")
     _add_common(p_scan)
     p_scan.add_argument("-a", "--after", default=None, metavar="JOBID",
@@ -103,7 +119,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
-    dispatch = {"equil": main_equil, "scan": main_scan, "string": main_string}
+    dispatch = {"equil": main_equil, "prod": main_prod, "scan": main_scan, "string": main_string}
     try:
         dispatch[args.stage](args)
     except Exception as exc:

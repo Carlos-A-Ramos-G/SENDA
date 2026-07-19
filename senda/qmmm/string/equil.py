@@ -25,7 +25,7 @@ from ..common.atoms import (
 )
 from ..common.h10 import generate_h10_topology
 from ..common.cvs import load_guess, interpolate_guess, write_scan_guess, write_string_guess, write_cvs_file
-from ..common.templates import fill, EQUIL_IN, EQUIL_SLURM
+from ..common.templates import fill, STAGE05_IN, EQUIL_SLURM
 
 
 def setup(
@@ -155,7 +155,11 @@ def setup(
     # AMBER input
     equil_cfg = inh_cfg.get("equil") or {}
     in_text = fill(
-        EQUIL_IN,
+        STAGE05_IN,
+        IREST      = 0,
+        NTX        = 1,
+        NMROPT     = "\n  nmropt   = 1,",
+        DISANG     = "&wt type = 'END'/\nDISANG=restr\n/\n",
         TEMP       = equil_cfg.get("temp",     300.0),
         QMCUT      = inh_cfg.get("qmcut",      12.0),
         GAMMA_LN   = equil_cfg.get("gamma_ln", 5.0),

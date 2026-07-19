@@ -30,6 +30,8 @@ ligand PDBs       ->  senda-param   ->  GAFF parameters
                                                   |
                        senda-qmmm string equil   ->  QM/MM equilibration
                                                   |
+                       senda-qmmm string prod    ->  restraint-free production (optional)
+                                                  |
                        senda-qmmm string scan    ->  restrained path scan
                                                   |
                        senda-qmmm string string  ->  free energy profile (ASM)
@@ -49,6 +51,7 @@ On an HPC cluster, use `senda-slurm` to generate and chain all SLURM scripts aut
 | `senda-slurm` | Generate a chained SLURM workflow script for the full pipeline |
 | `senda-analyse` | Analyse reactive distances from NVT trajectories and select a representative frame for QM/MM |
 | `senda-qmmm string equil` | Stage 05: set up and optionally submit the QM/MM equilibration job |
+| `senda-qmmm string prod` | Stage 05_QMMM_restraint_free: optional unrestrained QM/MM production run after equilibration |
 | `senda-qmmm string scan` | Stage 06: set up the restrained scan along the initial guess path |
 | `senda-qmmm string string` | Stage 07: set up the adaptive string method (ASM) calculation |
 
@@ -402,7 +405,7 @@ pip install senda[analysis]   # installs scipy, matplotlib, pytraj
 
 ## QM/MM string method -- `senda-qmmm string`
 
-Drives the three-stage QM/MM adaptive string method (ASM) workflow using AMBER's `sander.MPI`. Each stage is independently callable so individual steps can be re-run without restarting the full pipeline.
+Drives the QM/MM adaptive string method (ASM) workflow using AMBER's `sander.MPI`. Each stage is independently callable so individual steps can be re-run without restarting the full pipeline.
 
 ### Prerequisites
 
@@ -417,6 +420,7 @@ AMBER with `sander.MPI` and `cpptraj` must be in `$PATH` (or loaded via a module
 | Subcommand | Stage | What it does |
 |---|---|---|
 | `senda-qmmm string equil` | 05 | Resolves CV atoms and QM region, builds H10 topology, writes AMBER input + SLURM script for QM/MM equilibration |
+| `senda-qmmm string prod` | 05_QMMM_restraint_free | **Optional.** Writes AMBER input + SLURM script for an unrestrained QM/MM production run starting from the equil output. If run, the scan stage uses its restart file as the starting structure. |
 | `senda-qmmm string scan` | 06 | Writes per-node harmonic restraint files from the interpolated guess, AMBER input template, scan SLURM script, and cpptraj centering script |
 | `senda-qmmm string string` | 07 | Writes CVs file, string guess, per-node input files (`in.sh`), groupfile, and SLURM script for `sander.MPI -ng N -groupfile` |
 
@@ -425,12 +429,14 @@ AMBER with `sander.MPI` and `cpptraj` must be in `$PATH` (or loaded via a module
 ```bash
 # Write all input files (no job submission)
 senda-qmmm string equil  config.yaml
+senda-qmmm string prod   config.yaml   # optional: restraint-free production
 senda-qmmm string scan   config.yaml
 senda-qmmm string string config.yaml
 
 # Write and submit to SLURM
 senda-qmmm string equil  -s config.yaml
-senda-qmmm string scan   -s --after <equil_jobid>  config.yaml
+senda-qmmm string prod   -s --after <equil_jobid>  config.yaml   # optional
+senda-qmmm string scan   -s --after <equil_or_prod_jobid>  config.yaml
 senda-qmmm string string -s --after <scan_jobid>   config.yaml
 
 # Process only one inhibitor / mutant
@@ -450,6 +456,9 @@ simulations/{inhibitor}/{mutant}/
 |   +-- in                        # AMBER QM/MM input
 |   +-- restr                     # extra restraints (AMBER &rst blocks)
 |   +-- equilibration.sh          # SLURM script
++-- 05_QMMM_restraint_free/       # only present if senda-qmmm string prod was run
+|   +-- in                        # AMBER QM/MM input (no restraints, irest=1)
+|   +-- prod.sh                   # SLURM script
 +-- 06_QMMM_scan/
 |   +-- in_template               # AMBER input with __NODE__ placeholder
 |   +-- restr0                    # extra restraints appended per node by scan job
@@ -739,6 +748,15 @@ qmmm:
           ntpr: 50
           ntwx: 100
           ntwr: 100
+
+        prod:               # stage 05_QMMM_restraint_free -- optional unrestrained production
+          nstlim: 100000    # run length (default 100000 steps = 100 ps at dt=0.001)
+          dt: 0.001
+          gamma_ln: 1.0     # lower friction than equil; typical for production
+          ntpr: 500
+          ntwx: 500
+          ntwr: 500
+          # temp: 300.0     # inherits from equil.temp if omitted
 
         scan:               # stage 06 -- restrained scan
           n_nodes: 64             # number of windows; must equal string.n_nodes
