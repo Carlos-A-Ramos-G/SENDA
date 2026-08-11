@@ -76,6 +76,9 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
           box_type: TIP3PBOX
           box_size: 12
           salt_molarity: 0.150   # enables SPLIT two-pass ion placement
+          extra_libs:            # cofactors or other molecules with custom parameters
+            - /path/to/COFAC.lib
+            - /path/to/COFAC.frcmod
 
     When split=True, the file is written as leap_structure_tmpl with NPOS/NNEG
     placeholders that the run script fills at job time after the SPLIT calculation.
@@ -95,6 +98,13 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
             f"loadoff {inh}.lib",
             f"loadamberparams {inh}.frcmod",
         ]
+
+    for path_str in leap_cfg.get("extra_libs", []):
+        fname = Path(path_str).name
+        if fname.endswith(".lib"):
+            lines.append(f"loadoff {fname}")
+        elif fname.endswith(".frcmod"):
+            lines.append(f"loadamberparams {fname}")
 
     lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
 
@@ -129,6 +139,14 @@ def _render_leap_count(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> 
             f"loadoff {inh}.lib",
             f"loadamberparams {inh}.frcmod",
         ]
+
+    for path_str in leap_cfg.get("extra_libs", []):
+        fname = Path(path_str).name
+        if fname.endswith(".lib"):
+            lines.append(f"loadoff {fname}")
+        elif fname.endswith(".frcmod"):
+            lines.append(f"loadamberparams {fname}")
+
     lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
     lines.append("charge structure")
     lines.append(f"solvatebox structure {box_type} {box_size}")
@@ -179,7 +197,7 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict,
 
     restr_cfg  = sim.get("restraints", {}) or {}
     nmr_list   = _get_nmr_list(sim, inh, has_ligand)
-    has_nmr    = bool(nmr_list)
+    has_nmr    = bool(nmr_list) or bool(restr_cfg.get("custom_restrainer"))
 
     pos_cfg     = restr_cfg.get("positional", {}) or {}
     restr_mask  = pos_cfg.get("mask",            _DEFAULT_RESTRAINT_MASK)
@@ -264,7 +282,8 @@ def _write_run_scripts(
     has_ligand: bool = True,
 ) -> None:
     use_hmr  = bool(sim.get("use_hmr", True))
-    has_nmr  = bool(_get_nmr_list(sim, inh, has_ligand))
+    restr_cfg = sim.get("restraints", {}) or {}
+    has_nmr  = bool(_get_nmr_list(sim, inh, has_ligand)) or bool(restr_cfg.get("custom_restrainer"))
 
     hmr_block = (
         "log '00_prep: HMR'\ncpptraj -i HMR.ccptraj"
@@ -405,8 +424,15 @@ def setup_replica(
                 )
             shutil.copy(src, replica_dir / "00_prep" / src.name)
 
+    # Extra lib/frcmod files (cofactors, modified residues, etc.)
+    leap_cfg = sim.get("leap") or {}
+    for path_str in leap_cfg.get("extra_libs", []):
+        src = Path(path_str)
+        if not src.exists():
+            raise FileNotFoundError(f"Extra lib/frcmod not found: {src}")
+        shutil.copy(src, replica_dir / "00_prep" / src.name)
+
     # tleap input
-    leap_cfg      = sim.get("leap") or {}
     salt_molarity = float(leap_cfg.get("salt_molarity", 0))
     if salt_molarity:
         (replica_dir / "00_prep" / "leap_count").write_text(
@@ -425,8 +451,16 @@ def setup_replica(
         (replica_dir / "00_prep" / "HMR.ccptraj").write_text(HMR_CCPTRAJ)
 
     # NMR restrainer (runs at job time, after tleap builds the topology)
-    nmr_list = _get_nmr_list(sim, inh, has_ligand)
-    if nmr_list:
+    nmr_list        = _get_nmr_list(sim, inh, has_ligand)
+    restr_cfg       = (sim.get("restraints") or {})
+    custom_script   = restr_cfg.get("custom_restrainer")
+    if custom_script:
+        src = Path(custom_script)
+        if not src.exists():
+            raise FileNotFoundError(f"custom_restrainer not found: {src}")
+        shutil.copy(src, replica_dir / "restrainer.py")
+        (replica_dir / "restrainer.py").chmod(0o755)
+    elif nmr_list:
         _write_exe(replica_dir / "restrainer.py", make_restrainer(nmr_list))
 
     # AMBER input files

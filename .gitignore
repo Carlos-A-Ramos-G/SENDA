@@ -22,6 +22,24 @@ ligands_libraries/
 logs/
 output/
 
+# --- AMBER binary and output files --------------------------------------------
+*.nc
+*.mdcrd
+*.crd
+*.rst7
+*.inpcrd
+*.parm7
+*.prmtop
+*.out
+*.mdin
+
+# --- Gaussian -----------------------------------------------------------------
+*.chk
+*.fchk
+
+# --- Jupyter ------------------------------------------------------------------
+.ipynb_checkpoints/
+
 # --- OS & editors -------------------------------------------------------------
 .DS_Store
 .idea/

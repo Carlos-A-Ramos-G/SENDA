@@ -6,12 +6,16 @@ Operations (in order):
   1. Strip CONECT and END records.
   2. Strip explicitly excluded HETATM residues (default: GOL).
   3. Keep only the specified chains for ATOM records.
-  4. Keep specified chains for HETATM non-water; keep HOH on any chain.
+  4. Keep specified chains for HETATM non-water; assign each water residue to
+     its nearest non-water chain by heavy-atom distance and keep it only if
+     that chain is retained.
   5. Apply residue_renames (e.g. "216" → "LER").
   6. Apply protonation states from a reference structure map.
 """
 
 from __future__ import annotations
+
+import numpy as np
 
 # Amino acid protonation variant groups.
 # A rename is applied only when both residue names belong to the same group.
@@ -47,6 +51,17 @@ def _resnum(line: str) -> int | None:
         return None
 
 
+def _coords(line: str) -> tuple[float, float, float] | None:
+    try:
+        return (
+            float(line[30:38]),
+            float(line[38:46]),
+            float(line[46:54]),
+        )
+    except ValueError:
+        return None
+
+
 def _rename_res(line: str, new_name: str) -> str:
     return line[:17] + f"{new_name:<3s}" + line[20:]
 
@@ -76,6 +91,59 @@ def build_protonation_map(
     return prot_map
 
 
+def _water_keep_set(
+    lines:          list[str],
+    chains:         frozenset[str],
+    strip_resnames: set[str],
+) -> set[tuple[str, int]]:
+    """
+    Assign each water residue to its nearest non-water chain by minimum
+    heavy-atom distance, and return the (chain, resnum) keys of waters whose
+    nearest chain is one of the retained `chains`.
+
+    Waters are not reliably chain-associated (crystallographic HOH records
+    often don't share a meaningful chain ID with the monomer they solvate),
+    so proximity to the retained protein/ligand atoms — rather than the
+    water's own chain field — determines whether it's kept.
+    """
+    anchor_coords: list[tuple[float, float, float]] = []
+    anchor_chains: list[str] = []
+    water_atoms:   dict[tuple[str, int], list[tuple[float, float, float]]] = {}
+
+    for line in lines:
+        if line[:6] not in ("ATOM  ", "HETATM"):
+            continue
+        resname = _resname(line)
+        if resname in strip_resnames:
+            continue
+        xyz = _coords(line)
+        if xyz is None:
+            continue
+        if resname == "HOH":
+            rn = _resnum(line)
+            if rn is None:
+                continue
+            water_atoms.setdefault((_chain(line), rn), []).append(xyz)
+        else:
+            anchor_coords.append(xyz)
+            anchor_chains.append(_chain(line))
+
+    if not anchor_coords:
+        return set(water_atoms)
+
+    anchors = np.asarray(anchor_coords)  # (N, 3)
+    keep: set[tuple[str, int]] = set()
+
+    for key, atoms in water_atoms.items():
+        wat   = np.asarray(atoms)  # (m, 3)
+        dists = np.linalg.norm(wat[:, None, :] - anchors[None, :, :], axis=-1)
+        nearest = anchor_chains[np.unravel_index(np.argmin(dists), dists.shape)[1]]
+        if nearest in chains:
+            keep.add(key)
+
+    return keep
+
+
 def clean(
     lines:           list[str],
     prot_map:        dict[tuple[str, int], str] | None = None,
@@ -98,6 +166,7 @@ def clean(
     """
     _renames: dict[str, str] = dict(residue_renames or [])
     _strip:   set[str]       = strip_resnames if strip_resnames is not None else {"GOL"}
+    _water_keep = _water_keep_set(lines, chains, _strip)
 
     out: list[str] = []
 
@@ -117,7 +186,11 @@ def clean(
             if rec == "HETATM":
                 if resname in _strip:
                     continue
-                if resname != "HOH" and ch not in chains:
+                if resname == "HOH":
+                    rn = _resnum(line)
+                    if rn is None or (ch, rn) not in _water_keep:
+                        continue
+                elif ch not in chains:
                     continue
 
             # Step 5: apply residue_renames
@@ -144,7 +217,9 @@ def clean(
             resname = _resname(line)
 
             if resname == "HOH":
-                out.append(line)
+                rn = _resnum(line)
+                if rn is not None and (ch, rn) in _water_keep:
+                    out.append(line)
                 continue
 
             if resname in _strip or ch not in chains:
