@@ -36,7 +36,7 @@ def _iter_pairs(cfg: dict, inh_filter: str | None, mut_filter: str | None):
     for inh, inh_cfg in inhibitors.items():
         if inh_filter and inh != inh_filter:
             continue
-        mutants = inh_cfg.get("mutants") or [None]
+        mutants = inh_cfg.get("mutants") or cfg.get("mutants") or [None]
         for mut in mutants:
             if mut is None:
                 mut = "WT"
