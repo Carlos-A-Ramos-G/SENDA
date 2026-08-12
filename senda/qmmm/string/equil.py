@@ -129,8 +129,9 @@ def setup(
     generate_h10_topology(top_path, h10_atoms, h10_path)
 
     # Guess interpolation (write here so scan can reuse)
-    string_cfg = inh_cfg.get("string") or {}
-    scan_cfg   = inh_cfg.get("scan")   or {}
+    string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
+    string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
+    scan_cfg   = inh_cfg.get("scan")   or string_cfg_top.get("scan")   or {}
     n_nodes    = int(scan_cfg.get("n_nodes", string_cfg.get("n_nodes", 64)))
     guess_path = Path(inh_cfg["guess"]) if not Path(inh_cfg.get("guess", "")).is_absolute() \
         else Path(inh_cfg["guess"])
@@ -153,7 +154,7 @@ def setup(
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     # AMBER input
-    equil_cfg = inh_cfg.get("equil") or {}
+    equil_cfg = inh_cfg.get("equil") or string_cfg_top.get("equil") or {}
     in_text = fill(
         STAGE05_IN,
         IREST      = 0,

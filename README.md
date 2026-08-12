@@ -724,6 +724,36 @@ slurm:
 # ---- QM/MM string method -----------------------------------------------------
 qmmm:
   string:
+    # Shared defaults for all inhibitors below. Omit an inhibitor's own
+    # equil/scan/string block entirely to inherit these; define one on the
+    # inhibitor to override it completely for that inhibitor (no per-key
+    # merging -- an inhibitor-level block replaces the shared one wholesale).
+    equil:              # stage 05 -- QM/MM equilibration
+      temp: 300.0
+      nstlim: 20000
+      dt: 0.001
+      gamma_ln: 5.0
+      ntpr: 50
+      ntwx: 100
+      ntwr: 100
+
+    scan:               # stage 06 -- restrained scan
+      n_nodes: 64             # number of windows; must equal string.n_nodes
+      force_constant: 100.0   # harmonic force constant (kcal/mol/A^2 or /rad^2)
+      nstlim: 5000
+      dt: 0.001
+      gamma_ln: 5.0
+
+    string:             # stage 07 -- adaptive string method
+      n_nodes: 64
+      nstlim: 50000
+      dt: 0.001
+      gamma_ln: 5.0
+      seed: 1234              # base random seed; each node gets seed + node_index
+      prep_steps: 500         # ASM preparation steps before string update
+      z_bias: false           # Fortran logical (.false. / .true.)
+      force_constant_d: 100.0 # string force constant
+
     inhibitors:
       LER:
         mutants: [WT, E166V]   # subset of top-level mutants to run; omit key for all
@@ -757,15 +787,6 @@ qmmm:
             rk2: 50.0
             rk3: 50.0
 
-        equil:              # stage 05 -- QM/MM equilibration
-          temp: 300.0
-          nstlim: 20000
-          dt: 0.001
-          gamma_ln: 5.0
-          ntpr: 50
-          ntwx: 100
-          ntwr: 100
-
         prod:               # stage 05_QMMM_restraint_free -- optional unrestrained production
           nstlim: 100000    # run length (default 100000 steps = 100 ps at dt=0.001)
           dt: 0.001
@@ -775,22 +796,8 @@ qmmm:
           ntwr: 500
           # temp: 300.0     # inherits from equil.temp if omitted
 
-        scan:               # stage 06 -- restrained scan
-          n_nodes: 64             # number of windows; must equal string.n_nodes
-          force_constant: 100.0   # harmonic force constant (kcal/mol/A^2 or /rad^2)
-          nstlim: 5000
-          dt: 0.001
-          gamma_ln: 5.0
-
-        string:             # stage 07 -- adaptive string method
-          n_nodes: 64
-          nstlim: 50000
-          dt: 0.001
-          gamma_ln: 5.0
-          seed: 1234              # base random seed; each node gets seed + node_index
-          prep_steps: 500         # ASM preparation steps before string update
-          z_bias: false           # Fortran logical (.false. / .true.)
-          force_constant_d: 100.0 # string force constant
+        # equil/scan/string omitted -- inherits the shared blocks defined
+        # above under qmmm.string (temp, nstlim, n_nodes, etc.)
 ```
 
 ---

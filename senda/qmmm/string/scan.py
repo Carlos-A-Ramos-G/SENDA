@@ -58,11 +58,12 @@ def setup(
     stage_dir = sim_base / "06_QMMM_scan"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
-    scan_cfg = inh_cfg.get("scan") or {}
+    string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
+    scan_cfg = inh_cfg.get("scan") or string_cfg_top.get("scan") or {}
     force_constant = float(scan_cfg.get("force_constant", 100.0))
 
     # AMBER input template (NODE filled by scan.sh via sed)
-    equil_cfg = inh_cfg.get("equil") or {}
+    equil_cfg = inh_cfg.get("equil") or string_cfg_top.get("equil") or {}
     in_text = fill(
         SCAN_IN_TEMPLATE,
         TEMP       = scan_cfg.get("temp",     equil_cfg.get("temp",     300.0)),

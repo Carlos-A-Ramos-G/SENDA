@@ -54,8 +54,9 @@ def setup(
     stage_dir = sim_base / "07_QMMM_string"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
-    string_cfg = inh_cfg.get("string") or {}
-    equil_cfg  = inh_cfg.get("equil")  or {}
+    string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
+    string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
+    equil_cfg  = inh_cfg.get("equil")  or string_cfg_top.get("equil")  or {}
     slurm_cfg  = cfg.get("slurm") or {}
     qmmm_slurm = slurm_cfg.get("qmmm") or {}
     cpu_cfg    = slurm_cfg.get("cpu")  or {}
