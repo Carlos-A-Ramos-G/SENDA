@@ -157,6 +157,12 @@ def setup(
     if not guess_path.is_absolute():
         guess_path = cwd / inh_cfg["guess"]
     guess_data = load_guess(guess_path)
+    if guess_data.shape[1] != len(cv_specs):
+        raise ValueError(
+            f"Guess file {guess_path} has {guess_data.shape[1]} column(s) but "
+            f"{len(cv_specs)} collective_variables are defined for {inh} -- "
+            "each CV needs a matching column in the guess file."
+        )
     if guess_data.shape[0] != n_nodes:
         print(f"  Interpolating guess: {guess_data.shape[0]} -> {n_nodes} nodes")
         guess_data = interpolate_guess(guess_data, n_nodes)
@@ -200,7 +206,7 @@ def setup(
         NMROPT     = "\n  nmropt   = 1," if has_restraints else "",
         DISANG     = "&wt type = 'END'/\nDISANG=restr\n/\n" if has_restraints else "",
         TEMP       = equil_cfg.get("temp",     300.0),
-        QMCUT      = inh_cfg.get("qmcut",      12.0),
+        QMCUT      = inh_cfg.get("qmcut") or string_cfg_top.get("qmcut") or 12.0,
         GAMMA_LN   = equil_cfg.get("gamma_ln", 5.0),
         NSTLIM     = equil_cfg.get("nstlim",   20000),
         DT         = equil_cfg.get("dt",        0.001),
@@ -252,7 +258,7 @@ def setup(
         "qmmask":            qmmask,
         "qmcharge":          qmcharge,
         "qm_theory":         inh_cfg.get("qm_theory", "DFTB3"),
-        "qmcut":             inh_cfg.get("qmcut", 12.0),
+        "qmcut":             inh_cfg.get("qmcut") or string_cfg_top.get("qmcut") or 12.0,
         "n_nodes":           n_nodes,
         "n_protein_res":     n_protein_res,
         "top_name":          top_path.name,

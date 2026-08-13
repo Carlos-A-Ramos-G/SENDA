@@ -63,7 +63,7 @@ def setup(
     in_text = fill(
         SCAN_IN_TEMPLATE,
         TEMP       = scan_cfg.get("temp",     equil_cfg.get("temp",     300.0)),
-        QMCUT      = inh_cfg.get("qmcut",     12.0),
+        QMCUT      = inh_cfg.get("qmcut") or string_cfg_top.get("qmcut") or 12.0,
         GAMMA_LN   = scan_cfg.get("gamma_ln", equil_cfg.get("gamma_ln", 5.0)),
         NSTLIM     = scan_cfg.get("nstlim",   5000),
         DT         = scan_cfg.get("dt",       0.001),

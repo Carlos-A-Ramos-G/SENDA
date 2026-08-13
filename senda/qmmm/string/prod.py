@@ -53,7 +53,7 @@ def setup(
         NMROPT    = "",
         DISANG    = "",
         TEMP      = prod_cfg.get("temp",     equil_cfg.get("temp",     300.0)),
-        QMCUT     = inh_cfg.get("qmcut",     12.0),
+        QMCUT     = inh_cfg.get("qmcut") or string_cfg_top.get("qmcut") or 12.0,
         GAMMA_LN  = prod_cfg.get("gamma_ln", 1.0),
         NSTLIM    = prod_cfg.get("nstlim",   100000),
         DT        = prod_cfg.get("dt",        0.001),

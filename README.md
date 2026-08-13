@@ -734,6 +734,11 @@ qmmm:
     # equil/scan/string block entirely to inherit these; define one on the
     # inhibitor to override it completely for that inhibitor (no per-key
     # merging -- an inhibitor-level block replaces the shared one wholesale).
+    # qmcut works the same way: set it here once for every inhibitor, or
+    # override it on a specific inhibitor if it genuinely needs a different
+    # cutoff.
+    qmcut: 12.0           # QM electrostatic cutoff in Angstroms
+
     equil:              # stage 05 -- QM/MM equilibration
       temp: 300.0
       nstlim: 20000
@@ -777,7 +782,7 @@ qmmm:
         guess: guesses/LER_path.dat   # initial path; interpolated to n_nodes automatically
 
         qm_theory: DFTB3   # semiempirical level (DFTB3 | PM6 | AM1 | etc.)
-        qmcut: 12.0         # QM electrostatic cutoff in Angstroms
+        # qmcut omitted -- inherits the shared value defined above under qmmm.string
 
         # Optional: override automatic QM region selection.
         # If set, qmcharge must also be provided.
