@@ -108,6 +108,7 @@ def setup(
         substrate_chain_map = _build_substrate_chain_map(
             substrate_A_set, all_substrate_amber, sequence_specs,
             chain_map, chains, top_atoms, top_path, sim_base,
+            coords=rst7_coords,
         )
 
     # Resolve CV atom indices (chain A)
