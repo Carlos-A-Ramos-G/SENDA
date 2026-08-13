@@ -702,10 +702,16 @@ analysis:
 
 # ---- SLURM -------------------------------------------------------------------
 slurm:
-  amber_module: apps/amber/24
+  # Full shell command that makes sander.MPI available in the QM/MM SLURM
+  # scripts (equil/prod/scan/string) -- not a bare module name. Whatever
+  # this cluster needs: "module load X", "source /path/to/amber.sh", or
+  # both chained with &&.
+  amber_module: "module load apps/amber/24"
   account: MY_ACCOUNT
 
   # Command to activate the Python environment where senda is installed.
+  # Only used by senda-complex/senda-launch -- the QM/MM SLURM scripts run
+  # sander.MPI directly and don't need Python, so this isn't inserted there.
   # Examples: "conda activate senda" | "module load python/3.11"
   senda_env: ""
 

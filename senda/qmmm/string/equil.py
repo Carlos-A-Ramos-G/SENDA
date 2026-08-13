@@ -226,20 +226,21 @@ def setup(
     rel_rst7   = f"../{rst7_path.name}"
     rel_parm   = f"../replica_1/00_prep/{top_path.name}"
 
-    senda_env = slurm_cfg.get("senda_env") or ""
-    env_line  = senda_env if senda_env else "# (no senda_env set)"
+    account        = slurm_cfg.get("account") or ""
+    account_line   = f"#SBATCH --account={account}" if account else "# (no account set)"
+    partition      = cpu_cfg.get("partition") or ""
+    partition_line = f"#SBATCH --partition={partition}" if partition else "# (no partition set)"
 
     slurm_text = fill(
         EQUIL_SLURM,
-        TIME         = qmmm_slurm.get("time",      "1-00:00:00"),
-        SCHEME       = f"{inh}_{mut}",
-        NTASKS       = qmmm_slurm.get("ntasks",    8),
-        ACCOUNT      = slurm_cfg.get("account",    ""),
-        PARTITION    = cpu_cfg.get("partition",     "cpu"),
-        SENDA_ENV    = env_line,
-        AMBER_MODULE = slurm_cfg.get("amber_module", "amber"),
-        REP_RST7     = rel_rst7,
-        PARM         = rel_parm,
+        TIME           = qmmm_slurm.get("time",      "1-00:00:00"),
+        SCHEME         = f"{inh}_{mut}",
+        NTASKS         = qmmm_slurm.get("ntasks",    8),
+        ACCOUNT_LINE   = account_line,
+        PARTITION_LINE = partition_line,
+        AMBER_MODULE   = slurm_cfg.get("amber_module", "module load amber"),
+        REP_RST7       = rel_rst7,
+        PARM           = rel_parm,
     )
     script = stage_dir / "equilibration.sh"
     script.write_text(slurm_text)

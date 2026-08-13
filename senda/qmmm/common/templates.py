@@ -143,12 +143,12 @@ EQUIL_SLURM = """\
 #SBATCH --ntasks=__NTASKS__
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-#SBATCH --account=__ACCOUNT__
-#SBATCH --partition=__PARTITION__
+__ACCOUNT_LINE__
+__PARTITION_LINE__
 
 hostname
-__SENDA_ENV__
-module load __AMBER_MODULE__
+srun numactl -s
+__AMBER_MODULE__
 
 export MPICH_NO_BUFFER_ALIAS_CHECK=1
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
@@ -170,12 +170,12 @@ SCAN_SLURM = """\
 #SBATCH --ntasks=__NTASKS__
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-#SBATCH --account=__ACCOUNT__
-#SBATCH --partition=__PARTITION__
+__ACCOUNT_LINE__
+__PARTITION_LINE__
 
 hostname
-__SENDA_ENV__
-module load __AMBER_MODULE__
+srun numactl -s
+__AMBER_MODULE__
 
 export MPICH_NO_BUFFER_ALIAS_CHECK=1
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
@@ -275,12 +275,12 @@ STRING_SLURM = """\
 #SBATCH --time=__TIME__
 #SBATCH --job-name=__SCHEME___string
 #SBATCH --ntasks=__NTASKS_STRING__
-#SBATCH --account=__ACCOUNT__
-#SBATCH --partition=__PARTITION__
+__ACCOUNT_LINE__
+__PARTITION_LINE__
 
 hostname
-__SENDA_ENV__
-module load __AMBER_MODULE__
+srun numactl -s
+__AMBER_MODULE__
 
 export MPICH_NO_BUFFER_ALIAS_CHECK=1
 
@@ -300,12 +300,12 @@ PROD_SLURM = """\
 #SBATCH --ntasks=__NTASKS__
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-#SBATCH --account=__ACCOUNT__
-#SBATCH --partition=__PARTITION__
+__ACCOUNT_LINE__
+__PARTITION_LINE__
 
 hostname
-__SENDA_ENV__
-module load __AMBER_MODULE__
+srun numactl -s
+__AMBER_MODULE__
 
 export MPICH_NO_BUFFER_ALIAS_CHECK=1
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
