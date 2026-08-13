@@ -18,12 +18,8 @@ from pathlib import Path
 import numpy as np
 
 from .equil import _load_stage_metadata
+from ..common.cvs import build_rst_block
 from ..common.templates import fill, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
-
-
-# AMBER r-bounds for each CV type (before/after the target window)
-_TAIL_DIST  = 999.0  # Angstrom tails for distance/angle
-_TAIL_DIHED = 180.0  # degrees added to dihedral target for tail
 
 
 def setup(
@@ -88,7 +84,7 @@ def setup(
             zip(cv_specs, cv_indices_per_cv, target_row)
         ):
             cv_type = cv.get("type", "distance").lower()
-            blocks.append(_amber_rst_block(indices, target, cv_type, force_constant))
+            blocks.append(build_rst_block(indices, target, cv_type, force_constant))
         (stage_dir / f"restr{node_i}").write_text("".join(blocks))
 
     # Extra restraints file (appended to each restr{i} by the scan job)
@@ -147,46 +143,6 @@ def setup(
 # ---------------------------------------------------------------------------
 # Restraint file helpers
 # ---------------------------------------------------------------------------
-
-def _amber_rst_block(
-    indices:        list[int],
-    target:         float,
-    cv_type:        str,
-    force_constant: float,
-) -> str:
-    """Return a single AMBER &rst block for one CV."""
-    iat = ", ".join(str(i) for i in indices) + ","
-    fc  = force_constant
-
-    if cv_type == "distance":
-        r1 = 0.0
-        r2 = target
-        r3 = target
-        r4 = _TAIL_DIST
-    elif cv_type == "angle":
-        r1 = max(0.0, target - 180.0)
-        r2 = target
-        r3 = target
-        r4 = min(360.0, target + 180.0)
-    elif cv_type == "dihedral":
-        r1 = target - _TAIL_DIHED
-        r2 = target
-        r3 = target
-        r4 = target + _TAIL_DIHED
-    else:
-        r1 = 0.0
-        r2 = target
-        r3 = target
-        r4 = _TAIL_DIST
-
-    return (
-        f"&rst\n"
-        f" iat={iat}\n"
-        f" r1={r1:.4f}, r2={r2:.4f}, r3={r3:.4f}, r4={r4:.4f},\n"
-        f" rk2={fc:.2f}, rk3={fc:.2f},\n"
-        f"/\n"
-    )
-
 
 def _build_extra_restr(extra_restraints: list) -> str:
     if not extra_restraints:

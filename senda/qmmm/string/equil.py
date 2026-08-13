@@ -5,7 +5,8 @@ Stage 05: QM/MM equilibration setup.
 
 Generates simulations/{inh}/{mut}/05_QMMM_equilibration/ containing:
   in                -- AMBER QM/MM input
-  restr             -- extra_restraints as AMBER &rst blocks (if any)
+  restr             -- extra_restraints, plus soft CV restraints targeting
+                       guess node 1 if equil.restrain_cvs is set (if any)
   equilibration.sh  -- SLURM job script
 
 Also writes (at the mutant level):
@@ -24,7 +25,10 @@ from ..common.atoms import (
     count_protein_residues,
 )
 from ..common.h10 import generate_h10_topology
-from ..common.cvs import load_guess, interpolate_guess, write_scan_guess, write_string_guess, write_cvs_file
+from ..common.cvs import (
+    load_guess, interpolate_guess, write_scan_guess, write_string_guess,
+    write_cvs_file, build_rst_block,
+)
 from ..common.templates import fill, STAGE05_IN, EQUIL_SLURM
 
 
@@ -121,7 +125,11 @@ def setup(
         print(f"    {label}: {' -- '.join(names)}")
 
     # QM region and charge
-    qmmask, qmcharge = resolve_qm_region(inh_cfg, cv_indices_flat, top_path)
+    qmmask, qmcharge = resolve_qm_region(
+        inh_cfg, cv_indices_flat, top_path,
+        chain_map=chain_map, top_atoms=top_atoms, top_residues=top_residues,
+        substrate_chain_map=substrate_chain_map, chain=chain, rst7_coords=rst7_coords,
+    )
 
     # H10 topology
     h10_atoms = find_h10_atoms(cv_indices_flat, top_atoms, top_residues)
@@ -153,14 +161,33 @@ def setup(
     stage_dir = sim_base / "05_QMMM_equilibration"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
-    # AMBER input
     equil_cfg = inh_cfg.get("equil") or string_cfg_top.get("equil") or {}
+
+    # Restraints (restr file): extra_restraints (absolute atom indices), plus
+    # optional soft CV restraints targeting guess node 1 (the reactant-state
+    # geometry) when equil.restrain_cvs is set.
+    extra = inh_cfg.get("extra_restraints") or []
+    restr_blocks = [_build_restr_file(extra)] if extra else []
+
+    if equil_cfg.get("restrain_cvs"):
+        force_constant = float(equil_cfg.get("force_constant", 20.0))
+        cv_blocks = [
+            build_rst_block(indices, float(target), cv.get("type", "distance").lower(), force_constant)
+            for cv, indices, target in zip(cv_specs, cv_indices_per_cv, guess_data[0])
+        ]
+        restr_blocks.append("".join(cv_blocks))
+
+    restr_text = "".join(restr_blocks)
+    (stage_dir / "restr").write_text(restr_text)
+    has_restraints = bool(restr_text.strip())
+
+    # AMBER input
     in_text = fill(
         STAGE05_IN,
         IREST      = 0,
         NTX        = 1,
-        NMROPT     = "\n  nmropt   = 1,",
-        DISANG     = "&wt type = 'END'/\nDISANG=restr\n/\n",
+        NMROPT     = "\n  nmropt   = 1," if has_restraints else "",
+        DISANG     = "&wt type = 'END'/\nDISANG=restr\n/\n" if has_restraints else "",
         TEMP       = equil_cfg.get("temp",     300.0),
         QMCUT      = inh_cfg.get("qmcut",      12.0),
         GAMMA_LN   = equil_cfg.get("gamma_ln", 5.0),
@@ -174,11 +201,6 @@ def setup(
         QM_THEORY  = inh_cfg.get("qm_theory",  "DFTB3"),
     )
     (stage_dir / "in").write_text(in_text)
-
-    # Extra restraints (restr file) -- optional
-    extra = inh_cfg.get("extra_restraints") or []
-    restr_text = _build_restr_file(extra)
-    (stage_dir / "restr").write_text(restr_text)
 
     # SLURM script
     slurm_cfg  = cfg.get("slurm") or {}

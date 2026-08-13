@@ -471,7 +471,7 @@ simulations/{inhibitor}/{mutant}/
 +-- _qmmm_string_meta.json        # resolved metadata shared across stages
 +-- 05_QMMM_equilibration/
 |   +-- in                        # AMBER QM/MM input
-|   +-- restr                     # extra restraints (AMBER &rst blocks)
+|   +-- restr                     # extra_restraints + optional CV restraints (AMBER &rst blocks)
 |   +-- equilibration.sh          # SLURM script
 +-- 05_QMMM_restraint_free/       # only present if senda-qmmm string prod was run
 |   +-- in                        # AMBER QM/MM input (no restraints, irest=1)
@@ -512,6 +512,12 @@ If `qmmask` is not set, senda selects the QM region automatically:
 4. Net charge is estimated by summing parmed partial charges of QM atoms.
 
 Override by setting `qmmask` and `qmcharge` explicitly in the inhibitor config block.
+
+If a manually-set `qmmask` needs to include a catalytic water whose residue number isn't stable across mutants or re-selected representative frames (e.g. `senda-analyse` may pick a different frame each run), write `:__NEAREST_WATER__` as its residue selector and add `qmwater_neighbor: <ref_spec>`. The placeholder is resolved fresh every run to the WAT residue nearest `qmwater_neighbor` -- the same search `nearest_water_to` uses for CVs -- so it always points at the correct water even though its residue number changes.
+
+### Equilibration CV restraints
+
+By default stage 05 runs unrestrained. Set `equil.restrain_cvs: true` (and optionally `equil.force_constant`, default `20.0`) to add a soft harmonic restraint on each CV, targeting the first row of the (interpolated) guess file -- the reactant-state geometry -- keeping equilibration close to the reaction path. Restraints are written to `restr` and combined with any `extra_restraints`; `nmropt`/`DISANG` are only added to the AMBER input when there's actually something to restrain.
 
 ### H10 topology
 

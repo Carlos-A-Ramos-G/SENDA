@@ -17,6 +17,54 @@ _AMBER_CV_TYPE = {
     "dihedral": "TORSION",
 }
 
+# AMBER r-bounds for each CV type (before/after the target window)
+TAIL_DIST  = 999.0  # Angstrom tails for distance/angle
+TAIL_DIHED = 180.0  # degrees added to dihedral target for tail
+
+
+# ---------------------------------------------------------------------------
+# CV restraint (&rst) blocks
+# ---------------------------------------------------------------------------
+
+def build_rst_block(
+    indices:        list[int],
+    target:         float,
+    cv_type:        str,
+    force_constant: float,
+) -> str:
+    """Return a single AMBER &rst block restraining one CV to target."""
+    iat = ", ".join(str(i) for i in indices) + ","
+    fc  = force_constant
+
+    if cv_type == "distance":
+        r1 = 0.0
+        r2 = target
+        r3 = target
+        r4 = TAIL_DIST
+    elif cv_type == "angle":
+        r1 = max(0.0, target - 180.0)
+        r2 = target
+        r3 = target
+        r4 = min(360.0, target + 180.0)
+    elif cv_type == "dihedral":
+        r1 = target - TAIL_DIHED
+        r2 = target
+        r3 = target
+        r4 = target + TAIL_DIHED
+    else:
+        r1 = 0.0
+        r2 = target
+        r3 = target
+        r4 = TAIL_DIST
+
+    return (
+        f"&rst\n"
+        f" iat={iat}\n"
+        f" r1={r1:.4f}, r2={r2:.4f}, r3={r3:.4f}, r4={r4:.4f},\n"
+        f" rk2={fc:.2f}, rk3={fc:.2f},\n"
+        f"/\n"
+    )
+
 
 # ---------------------------------------------------------------------------
 # CVs file
