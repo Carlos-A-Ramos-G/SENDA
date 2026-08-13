@@ -10,7 +10,10 @@ Generates simulations/{inh}/{mut}/05_QMMM_equilibration/ containing:
   equilibration.sh  -- SLURM job script
 
 Also writes (at the mutant level):
-  structure_H10.parm7  -- topology with QM H masses set to 10
+  structure_H10.parm7  -- built from replica_1/00_prep/structure.parm7 (never
+                          structure_HMR.parm7) with the reactive hydrogens'
+                          mass set to 10 amu, for the string method's
+                          mass-weighted path CV
 """
 from __future__ import annotations
 
@@ -47,7 +50,7 @@ def setup(
     and optionally submits the SLURM job.
     """
     from senda.analysis.distances import (
-        _find_topology, _find_pdb,
+        _find_pdb,
         _build_chain_map, _build_substrate_chain_map,
     )
     import pytraj as pt
@@ -59,7 +62,14 @@ def setup(
     chains      = mc_cfg.get("chains") or ["A"]
     chain       = chains[0]  # QM/MM uses chain A representative
 
-    top_path    = _find_topology(rep1_dir)
+    # Always build from the non-HMR topology, never structure_HMR.parm7:
+    # the string method's mass-weighted path CV relies on H10 setting the
+    # reactive hydrogens' mass to 10 amu relative to the true 1.008 amu
+    # baseline. Starting from HMR's already-redistributed hydrogen masses
+    # would miscalibrate that weighting for every other H in the system.
+    top_path = rep1_dir / "00_prep" / "structure.parm7"
+    if not top_path.exists():
+        raise FileNotFoundError(f"Topology not found: {top_path}")
     pdb_path    = _find_pdb(rep1_dir, protein_dir, inh, mut)
     top         = pt.load_topology(str(top_path))
     top_atoms   = list(top.atoms)
