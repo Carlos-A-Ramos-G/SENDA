@@ -361,8 +361,9 @@ for ((i=1; i<=${max_min_cycles}; i++)); do
                             -r structure_min_${i}.rst7 \\
                             -ref structure_min_$((i-1)).rst7
 
-    min_rms=$(awk '/NSTEP[[:space:]]+ENERGY[[:space:]]+RMS[[:space:]]+GMAX/ {getline; print $3}' \\
-                  structure_min_${i}.out | sort -g | head -n 1)
+    min_rms=$(awk '/NSTEP[[:space:]]+ENERGY[[:space:]]+RMS[[:space:]]+GMAX/ {
+                       getline; if (min == "" || $3+0 < min+0) min = $3
+                   } END { print min }' structure_min_${i}.out)
     converged=$(awk -v r="${min_rms:-9e99}" -v t="${conv_thresh}" \\
                 'BEGIN {print (r+0 < t+0) ? 1 : 0}')
 
