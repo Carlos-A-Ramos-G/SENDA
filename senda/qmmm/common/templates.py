@@ -198,9 +198,8 @@ for i in $(seq 1 $NODES); do
     echo "ERROR: sander.MPI failed at node $i -- aborting." >&2
     exit 1
   fi
+  bash center.sh $i
 done
-
-bash center.sh
 """
 
 # ---------------------------------------------------------------------------
@@ -209,22 +208,23 @@ bash center.sh
 
 CENTER_SH = """\
 #!/bin/bash
-# Center scan restart files on the protein before string method.
+# Center one scan node's restart file on the protein, right after that
+# node's sander.MPI run finishes -- called per-node from scan.sh.
+# Usage: bash center.sh <node_index>
 
 PARM=__PARM__
-N=__N_NODES__
 MASK=":1-__PROTEIN_LAST_RES__"
+i=$1
 
-for i in $(seq 1 $N); do
-  INPUT="${i}.rst7"
-  OUTPUT="${i}_centred.rst7"
+INPUT="${i}.rst7"
+OUTPUT="${i}_centred.rst7"
 
-  if [ ! -f "$INPUT" ]; then
-    echo "WARNING: $INPUT not found, skipping."
-    continue
-  fi
+if [ ! -f "$INPUT" ]; then
+  echo "WARNING: $INPUT not found, skipping." >&2
+  exit 1
+fi
 
-  cpptraj <<EOF
+cpptraj <<EOF
 parm $PARM
 trajin $INPUT
 autoimage
@@ -235,13 +235,12 @@ go
 quit
 EOF
 
-  if [ $? -ne 0 ]; then
-    echo "ERROR: cpptraj failed on $INPUT -- aborting." >&2
-    exit 1
-  fi
-done
+if [ $? -ne 0 ]; then
+  echo "ERROR: cpptraj failed on $INPUT -- aborting." >&2
+  exit 1
+fi
 
-echo "Centering complete: ${N} files written as *_centred.rst7"
+echo "Centered node $i -> $OUTPUT"
 """
 
 # ---------------------------------------------------------------------------
@@ -297,7 +296,7 @@ __AMBER_MODULE__
 export MPICH_NO_BUFFER_ALIAS_CHECK=1
 
 mkdir -p results
-bash in.sh __N_NODES__
+bash in.sh
 srun --cpu-bind=cores sander.MPI -ng __N_NODES__ -groupfile string.groupfile
 """
 

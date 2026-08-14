@@ -8,7 +8,8 @@ Generates simulations/{inh}/{mut}/06_QMMM_scan/ containing:
   restr0       -- extra_restraints as AMBER &rst blocks (if any)
   restr{i}     -- per-node CV restraints (from guess) + restr0 appended in job
   scan.sh      -- SLURM job script (sequential over all nodes)
-  center.sh    -- cpptraj centering run at end of scan job
+  center.sh    -- cpptraj centering for one node; scan.sh calls it after
+                  each node's sander.MPI run finishes
 """
 from __future__ import annotations
 
@@ -119,11 +120,11 @@ def setup(
     script.write_text(slurm_text)
     script.chmod(0o755)
 
-    # Center.sh (cpptraj centering run at end of scan job)
+    # Center.sh (cpptraj centering, called once per node right after that
+    # node's sander.MPI run finishes)
     center_text = fill(
         CENTER_SH,
         PARM             = rel_parm,
-        N_NODES          = n_nodes,
         PROTEIN_LAST_RES = meta["n_protein_res"],
     )
     csh = stage_dir / "center.sh"
