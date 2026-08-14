@@ -298,6 +298,6 @@ def _load_stage_metadata(sim_base: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(
             f"Stage metadata not found at {path}\n"
-            "Run 'senda-qmmm string equil' first."
+            "Run 'senda-qmmm --config config.yaml string equil' first."
         )
     return json.loads(path.read_text())
