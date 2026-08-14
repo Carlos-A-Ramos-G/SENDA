@@ -158,10 +158,9 @@ def write_scan_guess(data: np.ndarray, out_path: Path) -> None:
 
 
 def write_string_guess(data: np.ndarray, out_path: Path) -> None:
-    """Write guess with AMBER string header: N_nodes  N_cvs  0.0"""
+    """Write guess with AMBER string header: bare N_nodes on its own line."""
     n_nodes, n_cvs = data.shape
-    header = f"{n_nodes}    {n_cvs}  0.0"
-    lines  = [header]
+    lines = [str(n_nodes)]
     for row in data:
         lines.append("  ".join(f"{v:.6f}" for v in row))
     out_path.write_text("\n".join(lines) + "\n")
