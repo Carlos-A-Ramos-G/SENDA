@@ -112,7 +112,7 @@ string input file
   ntwr     = __NTWR__,
   ntxo     = 1,
   ifqnt    = 1,
-  ig       = __SEED__,
+  ig       = @NODE_SEED@,
   asm      = 1,
  /
  &qmmm
@@ -256,13 +256,25 @@ if [ -f string.groupfile ]; then
   rm string.groupfile
 fi
 
-PARM=__PARM_H10__
-SEED=__SEED__
 NODES=__N_NODES__
+PARM=__PARM_H10__
+REACT=../06_QMMM_scan/1_centred.rst7
+PROD=../06_QMMM_scan/${NODES}_centred.rst7
+SEED=__SEED__
 
 for i in $(seq 1 $NODES); do
-  sed "s/__SEED__/$((SEED + i))/g" in > ${i}.in
-  echo "-O -rem 0 -i ${i}.in -o ${i}.out -c ../06_QMMM_scan/${i}_centred.rst7 -r ${i}.rst7 -x ${i}.nc -inf ${i}.mdinfo -p $PARM" >> string.groupfile
+  # generate sander input for node $i
+  sed "s/@NODE_SEED@/$((SEED + i))/g" in > ${i}.in
+
+  # use the reactant structure for the first half of the nodes, product for the rest
+  if [ $i -le $((NODES / 2)) ]; then
+    crd=$REACT
+  else
+    crd=$PROD
+  fi
+
+  # write out the sander arguments for node $i to the groupfile
+  echo "-O -rem 0 -i ${i}.in -o ${i}.out -c ${crd} -r ${i}.rst7 -x ${i}.nc -inf ${i}.mdinfo -p $PARM" >> string.groupfile
 done
 """
 

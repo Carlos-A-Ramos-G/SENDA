@@ -76,7 +76,6 @@ def setup(
         QMMASK           = meta["qmmask"],
         QMCHARGE         = meta["qmcharge"],
         QM_THEORY        = meta["qm_theory"],
-        SEED             = "__SEED__",   # left for in.sh to substitute per node
         PREP_STEPS       = string_cfg.get("prep_steps",       500),
         Z_BIAS           = str(string_cfg.get("z_bias", "false")).lower(),
         FORCE_CONSTANT_D = string_cfg.get("force_constant_d", 100.0),
