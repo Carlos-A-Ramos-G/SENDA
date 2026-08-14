@@ -8,10 +8,16 @@ Entry point for `senda-qmmm string` subcommands:
   string  -- stage 07: adaptive string method setup
 
 Usage:
-  senda-qmmm string equil  --config config.yaml [-s] [-i INH] [-m MUT]
-  senda-qmmm string prod   --config config.yaml [-s] [-a JOBID] [-i INH] [-m MUT]
-  senda-qmmm string scan   --config config.yaml [-s] [-a JOBID] [-i INH] [-m MUT]
-  senda-qmmm string string --config config.yaml [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml string equil  [-s] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml string prod   [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml string scan   [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml string string [-s] [-a JOBID] [-i INH] [-m MUT]
+
+Without -i/-m: processes every inhibitor under qmmm.string.inhibitors that's
+also present in the top-level inhibitors: list (or all of them if that list
+is empty), and every mutant from the per-inhibitor or top-level mutants:
+list. -i/-m each explicitly select one inhibitor/mutant, bypassing those
+filters entirely -- even for a pair not listed anywhere else in the config.
 """
 from __future__ import annotations
 
@@ -32,16 +38,27 @@ def _iter_pairs(cfg: dict, inh_filter: str | None, mut_filter: str | None):
     qmmm_cfg = cfg.get("qmmm") or {}
     string_cfg_top = qmmm_cfg.get("string") or {}
     inhibitors = string_cfg_top.get("inhibitors") or {}
+    top_inhibitors = cfg.get("inhibitors") or []
 
     for inh, inh_cfg in inhibitors.items():
-        if inh_filter and inh != inh_filter:
+        # -i explicitly requests one inhibitor -- bypasses the top-level
+        # inhibitors: gate entirely. Without -i, that gate applies (if set).
+        if inh_filter:
+            if inh != inh_filter:
+                continue
+        elif top_inhibitors and inh not in top_inhibitors:
             continue
+
+        # -m explicitly requests one mutant -- bypasses the per-inhibitor/
+        # top-level mutants: fallback chain entirely.
+        if mut_filter:
+            yield inh, mut_filter, inh_cfg
+            continue
+
         mutants = inh_cfg.get("mutants") or cfg.get("mutants") or [None]
         for mut in mutants:
             if mut is None:
                 mut = "WT"
-            if mut_filter and mut != mut_filter:
-                continue
             yield inh, mut, inh_cfg
 
 
@@ -85,9 +102,14 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", type=Path, required=True, metavar="CONFIG",
                    help="Path to senda config.yaml")
     p.add_argument("-i", "--inh", default=None, metavar="INH",
-                   help="Run only for this inhibitor")
+                   help="Run only for this inhibitor -- bypasses the top-level "
+                        "inhibitors: filter (default: every inhibitor under "
+                        "qmmm.string.inhibitors that's also in the top-level "
+                        "inhibitors: list, or all of them if that list is empty)")
     p.add_argument("-m", "--mut", default=None, metavar="MUT",
-                   help="Run only for this mutant")
+                   help="Run only for this mutant -- bypasses the per-inhibitor/"
+                        "top-level mutants: fallback entirely, even for a mutant "
+                        "not listed anywhere in the config")
     p.add_argument("-s", "--submit", action="store_true",
                    help="Submit SLURM job after writing files")
 

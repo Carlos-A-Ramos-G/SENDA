@@ -445,22 +445,24 @@ AMBER with `sander.MPI` and `cpptraj` must be in `$PATH` (or loaded via a module
 
 ```bash
 # Write all input files (no job submission)
-senda-qmmm string equil  --config config.yaml
-senda-qmmm string prod   --config config.yaml   # optional: restraint-free production
-senda-qmmm string scan   --config config.yaml
-senda-qmmm string string --config config.yaml
+senda-qmmm --config config.yaml string equil
+senda-qmmm --config config.yaml string prod    # optional: restraint-free production
+senda-qmmm --config config.yaml string scan
+senda-qmmm --config config.yaml string string
 
 # Write and submit to SLURM
-senda-qmmm string equil  -s --config config.yaml
-senda-qmmm string prod   -s --after <equil_jobid>  --config config.yaml   # optional
-senda-qmmm string scan   -s --after <equil_or_prod_jobid>  --config config.yaml
-senda-qmmm string string -s --after <scan_jobid>   --config config.yaml
+senda-qmmm --config config.yaml string equil  -s
+senda-qmmm --config config.yaml string prod   -s --after <equil_jobid>   # optional
+senda-qmmm --config config.yaml string scan   -s --after <equil_or_prod_jobid>
+senda-qmmm --config config.yaml string string -s --after <scan_jobid>
 
 # Process only one inhibitor / mutant
-senda-qmmm string equil -i LER -m WT --config config.yaml
+senda-qmmm --config config.yaml string equil -i LER -m WT
 ```
 
-`--config` is required for every `senda-qmmm string` subcommand.
+`--config` is required and must come before `string`, same as `senda-sim --config config.yaml <command>`.
+
+Without `-i`/`-m`: processes every inhibitor under `qmmm.string.inhibitors` that's also present in the top-level `inhibitors:` list (or all of them if that list is empty), and every mutant from the per-inhibitor or top-level `mutants:` list. `-i`/`-m` each explicitly select one inhibitor/mutant, bypassing those filters entirely -- even for a pair not listed anywhere else in the config.
 
 ### Outputs
 
