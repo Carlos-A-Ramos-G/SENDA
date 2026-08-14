@@ -8,10 +8,10 @@ Entry point for `senda-qmmm string` subcommands:
   string  -- stage 07: adaptive string method setup
 
 Usage:
-  senda-qmmm string equil  [-s] [-i INH] [-m MUT] [config.yaml]
-  senda-qmmm string prod   [-s] [-a JOBID] [-i INH] [-m MUT] [config.yaml]
-  senda-qmmm string scan   [-s] [-a JOBID] [-i INH] [-m MUT] [config.yaml]
-  senda-qmmm string string [-s] [-a JOBID] [-i INH] [-m MUT] [config.yaml]
+  senda-qmmm string equil  --config config.yaml [-s] [-i INH] [-m MUT]
+  senda-qmmm string prod   --config config.yaml [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm string scan   --config config.yaml [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm string string --config config.yaml [-s] [-a JOBID] [-i INH] [-m MUT]
 """
 from __future__ import annotations
 
@@ -82,8 +82,8 @@ def main_string(args):
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("config", type=Path, nargs="?", default=Path("config.yaml"),
-                   help="Path to senda config.yaml (default: config.yaml)")
+    p.add_argument("--config", type=Path, required=True, metavar="CONFIG",
+                   help="Path to senda config.yaml")
     p.add_argument("-i", "--inh", default=None, metavar="INH",
                    help="Run only for this inhibitor")
     p.add_argument("-m", "--mut", default=None, metavar="MUT",

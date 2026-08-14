@@ -445,20 +445,22 @@ AMBER with `sander.MPI` and `cpptraj` must be in `$PATH` (or loaded via a module
 
 ```bash
 # Write all input files (no job submission)
-senda-qmmm string equil  config.yaml
-senda-qmmm string prod   config.yaml   # optional: restraint-free production
-senda-qmmm string scan   config.yaml
-senda-qmmm string string config.yaml
+senda-qmmm string equil  --config config.yaml
+senda-qmmm string prod   --config config.yaml   # optional: restraint-free production
+senda-qmmm string scan   --config config.yaml
+senda-qmmm string string --config config.yaml
 
 # Write and submit to SLURM
-senda-qmmm string equil  -s config.yaml
-senda-qmmm string prod   -s --after <equil_jobid>  config.yaml   # optional
-senda-qmmm string scan   -s --after <equil_or_prod_jobid>  config.yaml
-senda-qmmm string string -s --after <scan_jobid>   config.yaml
+senda-qmmm string equil  -s --config config.yaml
+senda-qmmm string prod   -s --after <equil_jobid>  --config config.yaml   # optional
+senda-qmmm string scan   -s --after <equil_or_prod_jobid>  --config config.yaml
+senda-qmmm string string -s --after <scan_jobid>   --config config.yaml
 
 # Process only one inhibitor / mutant
-senda-qmmm string equil -i LER -m WT config.yaml
+senda-qmmm string equil -i LER -m WT --config config.yaml
 ```
+
+`--config` is required for every `senda-qmmm string` subcommand.
 
 ### Outputs
 
@@ -481,9 +483,9 @@ simulations/{inhibitor}/{mutant}/
 |   +-- restr0                    # extra restraints appended per node by scan job
 |   +-- restr{1..N}               # per-node CV harmonic restraints
 |   +-- scan.sh                   # SLURM script (sequential node loop)
-|   +-- center.sh                 # cpptraj centering script (run at end of scan)
+|   +-- center.sh                 # cpptraj centering for one node; called by scan.sh after each node finishes
 +-- 07_QMMM_string/
-    +-- in                        # AMBER string input (__SEED__ filled by in.sh)
+    +-- in                        # AMBER string input (@NODE_SEED@ filled by in.sh)
     +-- in.sh                     # generates per-node {i}.in files + string.groupfile
     +-- guess                     # string guess with AMBER header (N_nodes  N_cvs  0.0)
     +-- CVs                       # AMBER CVs file for sander ASM

@@ -4,9 +4,9 @@ senda.qmmm.run
 Top-level entry point for `senda-qmmm`.
 
 Usage:
-  senda-qmmm string equil   [options] [config.yaml]
-  senda-qmmm string scan    [options] [config.yaml]
-  senda-qmmm string string  [options] [config.yaml]
+  senda-qmmm string equil   --config config.yaml [options]
+  senda-qmmm string scan    --config config.yaml [options]
+  senda-qmmm string string  --config config.yaml [options]
 """
 from __future__ import annotations
 
