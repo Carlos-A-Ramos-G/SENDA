@@ -275,7 +275,7 @@ RUN_GPU_HEADER = """\
 #SBATCH --output=__REPLICA_DIR__/slurm-%j.out
 #SBATCH --error=__REPLICA_DIR__/slurm-%j.err
 
-module load __MODULE__
+__MODULE__
 
 set -euo pipefail
 
@@ -294,7 +294,7 @@ NVT_CLUSTER_HEADER = """\
 #SBATCH --output=__JOBNAME__-%j.out
 #SBATCH --error=__JOBNAME__-%j.err
 
-module load __MODULE__
+__MODULE__
 
 set -euo pipefail
 
