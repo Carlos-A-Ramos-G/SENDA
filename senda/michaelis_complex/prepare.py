@@ -29,6 +29,8 @@ from .ligand import (
     extract_ligand,
     remove_ligand,
     protein_chains,
+    ligand_chains,
+    relabel_chain,
     renumber_serial,
 )
 
@@ -286,10 +288,28 @@ def prepare(
         if source == "native":
             ligand_lines = extract_ligand(aligned, inh_name)
         else:
-            ref_lines    = ref_inh_lines[inh_name]
+            # Match target chains to the reference's ligand chains
+            # positionally (1st retained chain <-> 1st ligand instance in
+            # the reference, 2nd <-> 2nd, ...) and relabel the copied lines
+            # to the target chain letter. The reference PDB isn't required
+            # to use the same chain letters as the target -- e.g. a
+            # reference with ligand chains {A, B} still supplies target
+            # chains {A, C} correctly.
+            ref_lines     = ref_inh_lines[inh_name]
+            target_chains = sorted(chains_present)
+            ref_chains    = sorted(ligand_chains(ref_lines, inh_name))
+            if len(ref_chains) < len(target_chains):
+                log.warning(
+                    "[%s] Reference for %s has ligand in %d chain(s) %s but "
+                    "%d target chain(s) %s need one -- some target chains "
+                    "will have no %s copy.",
+                    mutant, inh_name, len(ref_chains), ref_chains,
+                    len(target_chains), target_chains, inh_name,
+                )
             ligand_lines = []
-            for ch in sorted(chains_present):
-                ligand_lines.extend(extract_ligand(ref_lines, inh_name, chains={ch}))
+            for target_ch, ref_ch in zip(target_chains, ref_chains):
+                matched = extract_ligand(ref_lines, inh_name, chains={ref_ch})
+                ligand_lines.extend(relabel_chain(matched, target_ch))
             if not ligand_lines:
                 log.warning("[%s] No %s found in reference for chains %s",
                             mutant, inh_name, chains_present)

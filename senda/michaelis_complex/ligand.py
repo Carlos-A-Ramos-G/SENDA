@@ -28,6 +28,20 @@ def extract_ligand(
     return out
 
 
+def ligand_chains(lines: list[str], resname: str) -> set[str]:
+    """Return the set of chain IDs found among HETATM lines for *resname*."""
+    found: set[str] = set()
+    for line in lines:
+        if line[:6] == "HETATM" and line[17:20].strip() == resname:
+            found.add(line[21])
+    return found
+
+
+def relabel_chain(lines: list[str], new_chain: str) -> list[str]:
+    """Return *lines* with the chain ID column (PDB column 22) set to *new_chain*."""
+    return [line[:21] + new_chain + line[22:] for line in lines]
+
+
 def remove_ligand(lines: list[str], resname: str) -> list[str]:
     """Remove all HETATM and ANISOU lines whose residue name matches *resname*."""
     return [
