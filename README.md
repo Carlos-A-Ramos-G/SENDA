@@ -706,12 +706,20 @@ analysis:
 
 # ---- SLURM -------------------------------------------------------------------
 slurm:
-  # Full shell command that makes sander.MPI available in the QM/MM SLURM
-  # scripts (equil/prod/scan/string) -- not a bare module name. Whatever
+  # Full shell command that makes pmemd.cuda available in the classical MD
+  # SLURM scripts (run_gpu, NVT chunks) -- not a bare module name. Whatever
   # this cluster needs: "module load X", "source /path/to/amber.sh", or
   # both chained with &&.
   amber_module: "module load apps/amber/24"
   account: MY_ACCOUNT
+
+  # Whatever this cluster needs to make sander.MPI available in the QM/MM
+  # SLURM scripts (equil/prod/scan/string) -- inserted verbatim, so it can
+  # be any number of module load / source / export lines, not just AMBER.
+  # Use YAML's | block scalar for multiple lines:
+  env_setup: |
+    module load PrgEnv-gnu/8.5.0
+    source ~/.local/amber.sh
 
   # Command to activate the Python environment where senda is installed.
   # Only used by senda-complex/senda-launch -- the QM/MM SLURM scripts run

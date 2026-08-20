@@ -113,7 +113,7 @@ def setup(
         SCHEME        = meta["scheme"],
         NTASKS_STRING = ntasks_string,
         EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
-        AMBER_MODULE  = slurm_cfg.get("amber_module", "module load amber"),
+        ENV_SETUP     = slurm_cfg.get("env_setup", ""),
         N_NODES       = n_nodes,
     )
     script = stage_dir / "string.sh"

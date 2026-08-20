@@ -168,9 +168,8 @@ __EXTRA_SBATCH__
 
 hostname
 srun numactl -s
-__AMBER_MODULE__
+__ENV_SETUP__
 
-export MPICH_NO_BUFFER_ALIAS_CHECK=1
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 cp __REP_RST7__ 0.rst7
@@ -194,9 +193,8 @@ __EXTRA_SBATCH__
 
 hostname
 srun numactl -s
-__AMBER_MODULE__
+__ENV_SETUP__
 
-export MPICH_NO_BUFFER_ALIAS_CHECK=1
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 NODES=__N_NODES__
@@ -309,9 +307,7 @@ __EXTRA_SBATCH__
 
 hostname
 srun numactl -s
-__AMBER_MODULE__
-
-export MPICH_NO_BUFFER_ALIAS_CHECK=1
+__ENV_SETUP__
 
 mkdir -p results
 bash in.sh
@@ -333,9 +329,8 @@ __EXTRA_SBATCH__
 
 hostname
 srun numactl -s
-__AMBER_MODULE__
+__ENV_SETUP__
 
-export MPICH_NO_BUFFER_ALIAS_CHECK=1
 export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 cp ../05_QMMM_equilibration/0e.rst7 0.rst7

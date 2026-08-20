@@ -78,7 +78,7 @@ def setup(
         SCHEME        = meta["scheme"],
         NTASKS        = qmmm_cfg.get("ntasks", 8),
         EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
-        AMBER_MODULE  = slurm_cfg.get("amber_module", "module load amber"),
+        ENV_SETUP     = slurm_cfg.get("env_setup", ""),
         PARM          = rel_parm,
     )
     script = stage_dir / "prod.sh"
