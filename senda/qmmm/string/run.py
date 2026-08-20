@@ -1,17 +1,17 @@
 """
 senda.qmmm.string.run
 
-Entry point for `senda-qmmm string` subcommands:
+Entry point for `senda-qmmm` subcommands:
   equil   -- stage 05: QM/MM equilibration setup
   prod    -- stage 05_QMMM_restraint_free: optional unrestrained QM/MM production
   scan    -- stage 06: restrained scan setup
   string  -- stage 07: adaptive string method setup
 
 Usage:
-  senda-qmmm --config config.yaml string equil  [-s] [-i INH] [-m MUT]
-  senda-qmmm --config config.yaml string prod   [-s] [-a JOBID] [-i INH] [-m MUT]
-  senda-qmmm --config config.yaml string scan   [-s] [-a JOBID] [-i INH] [-m MUT]
-  senda-qmmm --config config.yaml string string [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml equil  [-s] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml prod   [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml scan   [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml string [-s] [-a JOBID] [-i INH] [-m MUT]
 
 Without -i/-m: processes every inhibitor under qmmm.string.inhibitors that's
 also present in the top-level inhibitors: list (or all of them if that list
@@ -99,8 +99,6 @@ def main_string(args):
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--config", type=Path, required=True, metavar="CONFIG",
-                   help="Path to senda config.yaml")
     p.add_argument("-i", "--inh", default=None, metavar="INH",
                    help="Run only for this inhibitor -- bypasses the top-level "
                         "inhibitors: filter (default: every inhibitor under "
@@ -116,9 +114,11 @@ def _add_common(p: argparse.ArgumentParser) -> None:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="senda-qmmm string",
-        description="QM/MM string method setup subcommands",
+        prog="senda-qmmm",
+        description="QM/MM adaptive string method setup subcommands",
     )
+    parser.add_argument("--config", type=Path, required=True, metavar="CONFIG",
+                        help="Path to senda config.yaml")
     sub = parser.add_subparsers(dest="stage", required=True)
 
     p_equil = sub.add_parser("equil",  help="Stage 05: QM/MM equilibration")

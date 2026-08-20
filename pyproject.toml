@@ -20,7 +20,7 @@ senda-complex = "senda.michaelis_complex.run:main"
 senda-sim     = "senda.simulation.run:main"
 senda-slurm   = "senda.workflow.run:main"
 senda-analyse = "senda.analysis.run:main"
-senda-qmmm    = "senda.qmmm.run:main"
+senda-qmmm    = "senda.qmmm.string.run:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "senda.__version__"}
