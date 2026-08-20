@@ -20,7 +20,7 @@ import numpy as np
 
 from .equil import _load_stage_metadata
 from ..common.cvs import build_rst_block
-from ..common.templates import fill, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
+from ..common.templates import fill, sbatch_lines, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
 
 
 def setup(
@@ -95,26 +95,20 @@ def setup(
 
     # SLURM script
     slurm_cfg  = cfg.get("slurm") or {}
-    qmmm_slurm = slurm_cfg.get("qmmm") or {}
+    qmmm_cfg   = slurm_cfg.get("qmmm") or {}
     cpu_cfg    = slurm_cfg.get("cpu")  or {}
 
     rel_parm = f"../replica_1/00_prep/{meta['top_name']}"
 
-    account        = slurm_cfg.get("account") or ""
-    account_line   = f"#SBATCH --account={account}" if account else "# (no account set)"
-    partition      = cpu_cfg.get("partition") or ""
-    partition_line = f"#SBATCH --partition={partition}" if partition else "# (no partition set)"
-
     slurm_text = fill(
         SCAN_SLURM,
-        TIME           = qmmm_slurm.get("time",       "2-00:00:00"),
-        SCHEME         = meta["scheme"],
-        NTASKS         = qmmm_slurm.get("ntasks",     8),
-        ACCOUNT_LINE   = account_line,
-        PARTITION_LINE = partition_line,
-        AMBER_MODULE   = slurm_cfg.get("amber_module", "module load amber"),
-        N_NODES        = n_nodes,
-        PARM           = rel_parm,
+        TIME          = cpu_cfg.get("time",   "2-00:00:00"),
+        SCHEME        = meta["scheme"],
+        NTASKS        = qmmm_cfg.get("ntasks", 8),
+        EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
+        AMBER_MODULE  = slurm_cfg.get("amber_module", "module load amber"),
+        N_NODES       = n_nodes,
+        PARM          = rel_parm,
     )
     script = stage_dir / "scan.sh"
     script.write_text(slurm_text)

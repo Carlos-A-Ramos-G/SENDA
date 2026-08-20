@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .equil import _load_stage_metadata
 from ..common.cvs import write_string_guess, write_cvs_file
-from ..common.templates import fill, STRING_IN, STRING_IN_SH, STRING_SLURM
+from ..common.templates import fill, sbatch_lines, STRING_IN, STRING_IN_SH, STRING_SLURM
 
 
 def setup(
@@ -58,7 +58,7 @@ def setup(
     string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
     equil_cfg  = inh_cfg.get("equil")  or string_cfg_top.get("equil")  or {}
     slurm_cfg  = cfg.get("slurm") or {}
-    qmmm_slurm = slurm_cfg.get("qmmm") or {}
+    qmmm_cfg   = slurm_cfg.get("qmmm") or {}
     cpu_cfg    = slurm_cfg.get("cpu")  or {}
 
     # AMBER string input (seed resolved per-node by in.sh)
@@ -102,25 +102,19 @@ def setup(
 
     # SLURM script
     # ntasks for string = n_nodes * ntasks_per_node (2 MPI tasks per node by default)
-    ntasks_per_node = int(qmmm_slurm.get("ntasks", 2))
+    ntasks_per_node = int(qmmm_cfg.get("ntasks", 2))
     ntasks_string   = n_nodes * ntasks_per_node
 
-    account        = slurm_cfg.get("account") or ""
-    account_line   = f"#SBATCH --account={account}" if account else "# (no account set)"
-    partition      = cpu_cfg.get("partition") or ""
-    partition_line = f"#SBATCH --partition={partition}" if partition else "# (no partition set)"
-
-    time_string = qmmm_slurm.get("time_string") or qmmm_slurm.get("time", "7-00:00:00")
+    time_string = cpu_cfg.get("time_string") or cpu_cfg.get("time", "7-00:00:00")
 
     slurm_text = fill(
         STRING_SLURM,
-        TIME           = time_string,
-        SCHEME         = meta["scheme"],
-        NTASKS_STRING  = ntasks_string,
-        ACCOUNT_LINE   = account_line,
-        PARTITION_LINE = partition_line,
-        AMBER_MODULE   = slurm_cfg.get("amber_module", "module load amber"),
-        N_NODES        = n_nodes,
+        TIME          = time_string,
+        SCHEME        = meta["scheme"],
+        NTASKS_STRING = ntasks_string,
+        EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
+        AMBER_MODULE  = slurm_cfg.get("amber_module", "module load amber"),
+        N_NODES       = n_nodes,
     )
     script = stage_dir / "string.sh"
     script.write_text(slurm_text)

@@ -226,12 +226,14 @@ slurm:
   # Examples: "conda activate senda" | "module load python/3.11"
   senda_env: ""
 
-  cpu:                         # param, complex, and launcher jobs
-    partition: xxxxx
+  cpu:                         # param, complex, launcher jobs, AND all senda-qmmm stages
+    partition: xxxxx            # optional; omit to leave unset
+    # qos: xxxxx                # optional; omit to leave unset
     ntasks: 1
-    cpus-per-task: 4
-    mem: "8G"
-    time: "4:00:00"
+    cpus-per-task: 4             # only used by param/complex/launcher jobs
+    mem: "8G"                    # optional; if set, applies to every cpu job including senda-qmmm
+    time: "4:00:00"              # default wall time (param/complex/launcher, and equil/scan/prod)
+    # time_string: "7-00:00:00"  # override: wall time specifically for the string method job (07)
 
   gpu:                         # run_gpu (stages 00-03) and NVT production chunks
     partition: gpu

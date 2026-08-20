@@ -49,6 +49,8 @@ def _header(
         lines.append(f"#SBATCH --mem={spec['mem']}")
     if spec.get("gres"):
         lines.append(f"#SBATCH --gres={spec['gres']}")
+    if spec.get("qos"):
+        lines.append(f"#SBATCH --qos={spec['qos']}")
     lines += [
         f"#SBATCH --partition={spec['partition']}",
         f"#SBATCH --account={spec['account']}",

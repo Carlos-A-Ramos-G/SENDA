@@ -14,6 +14,27 @@ def fill(template: str, **kwargs) -> str:
     return result
 
 
+# Keys placed explicitly by templates (as __NTASKS__, __TIME__, etc.) rather
+# than emitted generically -- skipped so they're never written out twice.
+_SBATCH_RESERVED = {"ntasks", "time", "time_string", "cpus-per-task"}
+
+
+def sbatch_lines(section: dict, **extra) -> str:
+    """
+    Build '#SBATCH --key=value' lines for whichever fields are present in
+    *section* (plus any keyword overrides), skipping reserved keys that
+    templates place explicitly. Missing/empty fields are simply omitted --
+    no placeholder comments.
+    """
+    fields = {**section, **extra}
+    lines = [
+        f"#SBATCH --{key}={value}"
+        for key, value in fields.items()
+        if key not in _SBATCH_RESERVED and value not in (None, "")
+    ]
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # AMBER input: stage 05 (equilibration and restraint-free production)
 #
@@ -143,8 +164,7 @@ EQUIL_SLURM = """\
 #SBATCH --ntasks=__NTASKS__
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-__ACCOUNT_LINE__
-__PARTITION_LINE__
+__EXTRA_SBATCH__
 
 hostname
 srun numactl -s
@@ -170,8 +190,7 @@ SCAN_SLURM = """\
 #SBATCH --ntasks=__NTASKS__
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-__ACCOUNT_LINE__
-__PARTITION_LINE__
+__EXTRA_SBATCH__
 
 hostname
 srun numactl -s
@@ -286,8 +305,7 @@ STRING_SLURM = """\
 #SBATCH --time=__TIME__
 #SBATCH --job-name=__SCHEME___string
 #SBATCH --ntasks=__NTASKS_STRING__
-__ACCOUNT_LINE__
-__PARTITION_LINE__
+__EXTRA_SBATCH__
 
 hostname
 srun numactl -s
@@ -311,8 +329,7 @@ PROD_SLURM = """\
 #SBATCH --ntasks=__NTASKS__
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
-__ACCOUNT_LINE__
-__PARTITION_LINE__
+__EXTRA_SBATCH__
 
 hostname
 srun numactl -s

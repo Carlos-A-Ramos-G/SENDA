@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 from .equil import _load_stage_metadata
-from ..common.templates import fill, STAGE05_IN, PROD_SLURM
+from ..common.templates import fill, sbatch_lines, STAGE05_IN, PROD_SLURM
 
 
 def setup(
@@ -67,25 +67,19 @@ def setup(
     (stage_dir / "in").write_text(in_text)
 
     slurm_cfg  = cfg.get("slurm") or {}
-    qmmm_slurm = slurm_cfg.get("qmmm") or {}
+    qmmm_cfg   = slurm_cfg.get("qmmm") or {}
     cpu_cfg    = slurm_cfg.get("cpu")  or {}
 
     rel_parm = f"../replica_1/00_prep/{meta['top_name']}"
 
-    account        = slurm_cfg.get("account") or ""
-    account_line   = f"#SBATCH --account={account}" if account else "# (no account set)"
-    partition      = cpu_cfg.get("partition") or ""
-    partition_line = f"#SBATCH --partition={partition}" if partition else "# (no partition set)"
-
     slurm_text = fill(
         PROD_SLURM,
-        TIME           = qmmm_slurm.get("time",       "3-00:00:00"),
-        SCHEME         = meta["scheme"],
-        NTASKS         = qmmm_slurm.get("ntasks",     8),
-        ACCOUNT_LINE   = account_line,
-        PARTITION_LINE = partition_line,
-        AMBER_MODULE   = slurm_cfg.get("amber_module", "module load amber"),
-        PARM           = rel_parm,
+        TIME          = cpu_cfg.get("time",   "3-00:00:00"),
+        SCHEME        = meta["scheme"],
+        NTASKS        = qmmm_cfg.get("ntasks", 8),
+        EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
+        AMBER_MODULE  = slurm_cfg.get("amber_module", "module load amber"),
+        PARM          = rel_parm,
     )
     script = stage_dir / "prod.sh"
     script.write_text(slurm_text)
