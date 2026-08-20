@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .equil import _load_stage_metadata
 from ..common.cvs import write_string_guess, write_cvs_file
-from ..common.templates import fill, sbatch_lines, STRING_IN, STRING_IN_SH, STRING_SLURM
+from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP_STRING, STRING_IN, STRING_IN_SH, STRING_SLURM
 
 
 def setup(
@@ -113,7 +113,7 @@ def setup(
         SCHEME        = meta["scheme"],
         NTASKS_STRING = ntasks_string,
         EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
-        ENV_SETUP     = slurm_cfg.get("env_setup", ""),
+        ENV_SETUP     = slurm_cfg.get("env_setup", DEFAULT_ENV_SETUP_STRING),
         N_NODES       = n_nodes,
     )
     script = stage_dir / "string.sh"

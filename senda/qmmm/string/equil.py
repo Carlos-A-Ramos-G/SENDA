@@ -32,7 +32,7 @@ from ..common.cvs import (
     load_guess, interpolate_guess, write_scan_guess, write_string_guess,
     write_cvs_file, build_rst_block,
 )
-from ..common.templates import fill, sbatch_lines, STAGE05_IN, EQUIL_SLURM
+from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP, STAGE05_IN, EQUIL_SLURM
 
 
 def setup(
@@ -232,7 +232,7 @@ def setup(
         SCHEME        = f"{inh}_{mut}",
         NTASKS        = qmmm_cfg.get("ntasks", 8),
         EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
-        ENV_SETUP     = slurm_cfg.get("env_setup", ""),
+        ENV_SETUP     = slurm_cfg.get("env_setup", DEFAULT_ENV_SETUP),
         REP_RST7      = rel_rst7,
         PARM          = rel_parm,
     )

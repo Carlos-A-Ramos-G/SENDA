@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 from .equil import _load_stage_metadata
-from ..common.templates import fill, sbatch_lines, STAGE05_IN, PROD_SLURM
+from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP, STAGE05_IN, PROD_SLURM
 
 
 def setup(
@@ -78,7 +78,7 @@ def setup(
         SCHEME        = meta["scheme"],
         NTASKS        = qmmm_cfg.get("ntasks", 8),
         EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
-        ENV_SETUP     = slurm_cfg.get("env_setup", ""),
+        ENV_SETUP     = slurm_cfg.get("env_setup", DEFAULT_ENV_SETUP),
         PARM          = rel_parm,
     )
     script = stage_dir / "prod.sh"

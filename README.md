@@ -706,6 +706,10 @@ analysis:
 
 # ---- SLURM -------------------------------------------------------------------
 slurm:
+  # amber_module and env_setup are separate settings for two different
+  # job families -- often the same command, but not coupled, since a
+  # cluster could need a different module/version for either one.
+
   # Full shell command that makes pmemd.cuda available in the classical MD
   # SLURM scripts (run_gpu, NVT chunks) -- not a bare module name. Whatever
   # this cluster needs: "module load X", "source /path/to/amber.sh", or
@@ -713,13 +717,21 @@ slurm:
   amber_module: "module load apps/amber/24"
   account: MY_ACCOUNT
 
-  # Whatever this cluster needs to make sander.MPI available in the QM/MM
-  # SLURM scripts (equil/prod/scan/string) -- inserted verbatim, so it can
-  # be any number of module load / source / export lines, not just AMBER.
-  # Use YAML's | block scalar for multiple lines:
+  # Whatever this cluster needs before sander.MPI runs in the QM/MM SLURM
+  # scripts (equil/prod/scan/string) -- inserted verbatim in place of the
+  # entire preamble (hostname/srun numactl -s/module loads/exports), not
+  # appended to a default. If omitted, a sensible default is used
+  # (hostname, srun numactl -s, and the SRUN_CPUS_PER_TASK export) --
+  # setting env_setup replaces that default entirely, so include those
+  # lines yourself too if you still want them. Use YAML's | block scalar
+  # for multiple lines:
   env_setup: |
+    hostname
+    srun numactl -s
     module load PrgEnv-gnu/8.5.0
     source ~/.local/amber.sh
+
+    export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
   # Command to activate the Python environment where senda is installed.
   # Only used by senda-complex/senda-launch -- the QM/MM SLURM scripts run

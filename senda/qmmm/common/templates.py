@@ -35,6 +35,22 @@ def sbatch_lines(section: dict, **extra) -> str:
     return "\n".join(lines)
 
 
+# Default __ENV_SETUP__ content, used only when slurm.env_setup is absent
+# from the config -- fully overridden (not appended to) by any value the
+# user does supply, so setting env_setup can also drop these lines.
+DEFAULT_ENV_SETUP = """\
+hostname
+srun numactl -s
+
+export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK"""
+
+# Stage 07 (string) never had the SRUN_CPUS_PER_TASK export -- kept faithful
+# to that here.
+DEFAULT_ENV_SETUP_STRING = """\
+hostname
+srun numactl -s"""
+
+
 # ---------------------------------------------------------------------------
 # AMBER input: stage 05 (equilibration and restraint-free production)
 #
@@ -166,11 +182,7 @@ EQUIL_SLURM = """\
 #SBATCH --cpus-per-task=1
 __EXTRA_SBATCH__
 
-hostname
-srun numactl -s
 __ENV_SETUP__
-
-export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 cp __REP_RST7__ 0.rst7
 srun --cpu-bind=cores sander.MPI \\
@@ -191,11 +203,7 @@ SCAN_SLURM = """\
 #SBATCH --cpus-per-task=1
 __EXTRA_SBATCH__
 
-hostname
-srun numactl -s
 __ENV_SETUP__
-
-export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 NODES=__N_NODES__
 
@@ -305,8 +313,6 @@ STRING_SLURM = """\
 #SBATCH --ntasks=__NTASKS_STRING__
 __EXTRA_SBATCH__
 
-hostname
-srun numactl -s
 __ENV_SETUP__
 
 mkdir -p results
@@ -327,11 +333,7 @@ PROD_SLURM = """\
 #SBATCH --cpus-per-task=1
 __EXTRA_SBATCH__
 
-hostname
-srun numactl -s
 __ENV_SETUP__
-
-export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 cp ../05_QMMM_equilibration/0e.rst7 0.rst7
 srun --cpu-bind=cores sander.MPI \\

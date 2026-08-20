@@ -20,7 +20,7 @@ import numpy as np
 
 from .equil import _load_stage_metadata
 from ..common.cvs import build_rst_block
-from ..common.templates import fill, sbatch_lines, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
+from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
 
 
 def setup(
@@ -106,7 +106,7 @@ def setup(
         SCHEME        = meta["scheme"],
         NTASKS        = qmmm_cfg.get("ntasks", 8),
         EXTRA_SBATCH  = sbatch_lines(cpu_cfg, account=slurm_cfg.get("account")),
-        ENV_SETUP     = slurm_cfg.get("env_setup", ""),
+        ENV_SETUP     = slurm_cfg.get("env_setup", DEFAULT_ENV_SETUP),
         N_NODES       = n_nodes,
         PARM          = rel_parm,
     )
