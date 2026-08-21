@@ -385,6 +385,24 @@ water_rdf:
 
 The penalty is added to the distance-deviation score (lower = better), so a value of 3.0 is equivalent to one distance being 3 sigma from its mode. Frames that satisfy the distance criterion but lack a water at the first peak are deprioritised rather than excluded.
 
+To leave specific water molecules out of every `water_rdf` calculation for an inhibitor -- e.g. a conserved water buried in a non-reactive cavity that would otherwise dominate the nearest-water statistics -- two options, alongside `reactive_distances`/`water_rdf`:
+
+- `exclude_water: [N, ...]` -- literal 1-based AMBER residue number(s). A water's residue number isn't stable across mutants (each topology is solvated independently), so a number found for one system usually isn't the right one to exclude in another.
+- `exclude_water_neighbor: <ref_spec>` (recommended) -- resolved dynamically instead: senda finds the WAT residue nearest this reference (frame 0 of replica_1's first NVT trajectory) and excludes it, fresh every run. `<ref_spec>` may be a single atom or a list of them (nearest = minimum distance to any of them):
+
+```yaml
+analysis:
+  NIR:
+    exclude_water_neighbor:
+      - {sequence: 41,  name: CA}
+      - {sequence: 164, name: CA}
+      - {sequence: 187, name: CA}
+    reactive_distances: [...]
+    water_rdf: [...]
+```
+
+Both can be combined; the two exclusion sets are unioned.
+
 ### Requirements
 
 ```bash

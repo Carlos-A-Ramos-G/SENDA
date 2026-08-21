@@ -71,6 +71,24 @@ def _build_chain_map(pdb_path: Path, top) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Shared coordinate loading
+# ---------------------------------------------------------------------------
+
+def _load_frame0_coords(top_path: Path, sim_base: Path) -> np.ndarray:
+    """Load frame 0 of the first NVT trajectory in replica_1 as a coordinate
+    array (n_atoms, 3) -- the shared reference frame for geometric lookups
+    (substrate chain assignment, exclude_water_neighbor)."""
+    import pytraj as pt
+    nc_files = sorted(glob.glob(str(sim_base / "replica_1" / "04_NVT" / "structure_NVT_*.nc")))
+    if not nc_files:
+        raise FileNotFoundError(
+            f"No NVT trajectories found in {sim_base / 'replica_1' / '04_NVT'}; "
+            "cannot perform geometric lookups"
+        )
+    return pt.load(nc_files[0], top=str(top_path), frame_indices=[0]).xyz[0]
+
+
+# ---------------------------------------------------------------------------
 # Substrate chain map: geometric proximity
 # ---------------------------------------------------------------------------
 
@@ -99,14 +117,7 @@ def _build_substrate_chain_map(
                          frame 0 of the first NVT trajectory in sim_base is used.
     """
     if coords is None:
-        import pytraj as pt
-        nc_files = sorted(glob.glob(str(sim_base / "replica_1" / "04_NVT" / "structure_NVT_*.nc")))
-        if not nc_files:
-            raise FileNotFoundError(
-                f"No NVT trajectories found in {sim_base / 'replica_1' / '04_NVT'}; "
-                "cannot perform geometric substrate assignment"
-            )
-        coords = pt.load(nc_files[0], top=str(top_path), frame_indices=[0]).xyz[0]
+        coords = _load_frame0_coords(top_path, sim_base)
 
     cand_coords: dict = {
         ar: coords[[a.index for a in top_atoms if a.resid + 1 == ar]]
@@ -201,6 +212,51 @@ def _resolve_atom_index(
     raise ValueError(
         f"Atom {aname!r} not found at AMBER residue {amber_resid} (chain {chain!r})"
     )
+
+
+def _find_nearest_water_resid(
+    ref_spec:            "dict | list",
+    chain_map:           dict,
+    top_atoms:           list,
+    top_residues:        list,
+    substrate_chain_map: dict,
+    chain:               str,
+    rst7_coords:         np.ndarray,
+    exclude_water:       "list | None" = None,
+) -> int:
+    """Return the 0-based resid of the WAT residue whose O is closest to ref_spec.
+
+    ref_spec may be a single atom spec or a list of them -- with a list,
+    "closest" is by minimum distance to ANY of the reference atoms, which
+    is useful for anchoring on a residue/pocket rather than one atom.
+
+    exclude_water holds 1-based AMBER residue numbers to skip -- e.g. a
+    conserved water buried in a non-reactive cavity that would otherwise
+    be picked as "nearest" over the reactive-site water.
+    """
+    ref_specs = ref_spec if isinstance(ref_spec, list) else [ref_spec]
+    ref_xyzs  = [
+        rst7_coords[_resolve_atom_index(chain_map, top_atoms, rs, chain, substrate_chain_map) - 1]
+        for rs in ref_specs
+    ]
+    excluded_resid = {n - 1 for n in (exclude_water or [])}
+
+    best_resid = None
+    best_dist  = float("inf")
+    for atom in top_atoms:
+        if (atom.name == "O" and top_residues[atom.resid].name == "WAT"
+                and atom.resid not in excluded_resid):
+            d = min(
+                float(np.sqrt(((rst7_coords[atom.index] - ref_xyz) ** 2).sum()))
+                for ref_xyz in ref_xyzs
+            )
+            if d < best_dist:
+                best_dist  = d
+                best_resid = atom.resid
+
+    if best_resid is None:
+        raise ValueError("No WAT residue found in topology -- cannot resolve nearest_water_to")
+    return best_resid
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +433,9 @@ def _analyse_chain(
     data_dir:            Path,
     rdf_plots_dir:       Path,
     rdf_data_dir:        Path,
+    exclude_water:          "list | None" = None,
+    exclude_water_neighbor: "list | dict | None" = None,
+    coords:                 "np.ndarray | None" = None,
 ) -> None:
     import pytraj as pt
 
@@ -421,10 +480,23 @@ def _analyse_chain(
             "bin_width":      0.05,
         })
 
-    # WAT-O atom indices (0-based) -- shared by all RDF specs
+    # WAT-O atom indices (0-based) -- shared by all RDF specs. exclude_water
+    # holds 1-based AMBER residue numbers to leave out (e.g. a conserved
+    # water buried in a non-reactive cavity that would otherwise dominate
+    # the nearest-water statistics). exclude_water_neighbor resolves the
+    # water to exclude dynamically instead of relying on a fixed residue
+    # number, which isn't stable across mutants (each topology is solvated
+    # independently).
+    excluded_resid = {n - 1 for n in (exclude_water or [])}
+    if exclude_water_neighbor:
+        excluded_resid.add(_find_nearest_water_resid(
+            exclude_water_neighbor, chain_map, top_atoms, top_residues,
+            substrate_chain_map, chain, coords,
+        ))
     wat_o_idx = [
         a.index for a in top_atoms
         if a.name == "O" and top_residues[a.resid].name == "WAT"
+        and a.resid not in excluded_resid
     ]
 
     # Per-RDF accumulators
@@ -608,14 +680,16 @@ def _analyse_chain(
 # ---------------------------------------------------------------------------
 
 def analyse(
-    inh:         str,
-    mut:         str,
-    dist_specs:  list,
-    rdf_specs:   list,
-    n_replicas:  int,
-    chains:      list,
-    protein_dir: Path,
-    cwd:         Path,
+    inh:                    str,
+    mut:                    str,
+    dist_specs:             list,
+    rdf_specs:              list,
+    n_replicas:             int,
+    chains:                 list,
+    protein_dir:            Path,
+    cwd:                    Path,
+    exclude_water:          "list | None" = None,
+    exclude_water_neighbor: "list | dict | None" = None,
 ) -> None:
     try:
         import pytraj as pt
@@ -653,13 +727,17 @@ def analyse(
     for rs in rdf_specs:
         _collect_atom_specs(rs.get("center_atoms", []))
 
+    coords = None
+    if substrate_A_set or exclude_water_neighbor:
+        coords = _load_frame0_coords(top_path, sim_base)
+
     substrate_chain_map: dict = {}
     if substrate_A_set:
         sub_name            = top_residues[next(iter(substrate_A_set)) - 1].name
         all_substrate_amber = {r.index + 1 for r in top_residues if r.name == sub_name}
         substrate_chain_map = _build_substrate_chain_map(
             substrate_A_set, all_substrate_amber, sequence_specs, chain_map,
-            chains, top_atoms, top_path, sim_base,
+            chains, top_atoms, top_path, sim_base, coords=coords,
         )
 
     print(f"  Topology : {top_path.name}")
@@ -687,4 +765,7 @@ def analyse(
             chain, dist_specs, rdf_specs, n_replicas, sim_base, inh, mut,
             top_path, chain_map, substrate_chain_map,
             plots_dir, data_dir, rdf_plots_dir, rdf_data_dir,
+            exclude_water=exclude_water,
+            exclude_water_neighbor=exclude_water_neighbor,
+            coords=coords,
         )
