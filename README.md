@@ -412,6 +412,24 @@ water_rdf:
 
 The penalty is added to the distance-deviation score (lower = better), so a value of 3.0 is equivalent to one distance being 3 sigma from its mode. Frames that satisfy the distance criterion but lack a water at the first peak are deprioritised rather than excluded.
 
+To leave specific water molecules out of every `water_rdf` calculation for an inhibitor -- e.g. a conserved water buried in a non-reactive cavity that would otherwise dominate the nearest-water statistics -- two options, alongside `reactive_distances`/`water_rdf`:
+
+- `exclude_water: [N, ...]` -- literal 1-based AMBER residue number(s). A water's residue number isn't stable across mutants (each topology is solvated independently), so a number found for one system usually isn't the right one to exclude in another.
+- `exclude_water_neighbor: <ref_spec>` (recommended) -- resolved dynamically instead, the same mechanism as `qmwater_exclude_neighbor` in the QM/MM config: senda finds the WAT residue nearest this reference (frame 0 of replica_1's first NVT trajectory) and excludes it, fresh every run. `<ref_spec>` may be a single atom or a list of them (nearest = minimum distance to any of them):
+
+```yaml
+analysis:
+  NIR:
+    exclude_water_neighbor:
+      - {sequence: 41,  name: CA}
+      - {sequence: 164, name: CA}
+      - {sequence: 187, name: CA}
+    reactive_distances: [...]
+    water_rdf: [...]
+```
+
+Both can be combined; the two exclusion sets are unioned.
+
 ### Requirements
 
 ```bash
@@ -518,6 +536,25 @@ If `qmmask` is not set, senda selects the QM region automatically:
 Override by setting `qmmask` and `qmcharge` explicitly in the inhibitor config block.
 
 If a manually-set `qmmask` needs to include a catalytic water whose residue number isn't stable across mutants or re-selected representative frames (e.g. `senda-analyse` may pick a different frame each run), write `:__NEAREST_WATER__` as its residue selector and add `qmwater_neighbor: <ref_spec>`. The placeholder is resolved fresh every run to the WAT residue nearest `qmwater_neighbor` -- the same search `nearest_water_to` uses for CVs -- so it always points at the correct water even though its residue number changes.
+
+To keep a specific water out of that search -- e.g. a conserved water buried in a non-reactive cavity that happens to be geometrically nearest -- two options, in the same inhibitor block as `qmwater_neighbor`/`qmmask`:
+
+- `qmwater_exclude: [N, ...]` -- literal 1-based AMBER residue number(s) to skip. Simple, but a water's residue number isn't stable across mutants/inhibitors (different topologies solvate independently), so a fixed number found for one system usually won't be the right one to exclude in another.
+- `qmwater_exclude_neighbor: <ref_spec>` (recommended) -- resolved dynamically the same way `qmwater_neighbor` is: senda finds the WAT residue nearest to this reference and excludes *that* from the main search, fresh every run. `<ref_spec>` may be a single atom (`{sequence: N, name: X}`) or a list of them, in which case "nearest" is by minimum distance to any of them -- useful for anchoring on a pocket defined by several residues rather than one atom:
+
+```yaml
+qmmm:
+  string:
+    inhibitors:
+      NIR:
+        qmwater_neighbor: {substrate_sequence: 614, name: NC}
+        qmwater_exclude_neighbor:
+          - {sequence: 41,  name: CA}
+          - {sequence: 164, name: CA}
+          - {sequence: 187, name: CA}
+```
+
+Both can be combined; the two exclusion sets are unioned.
 
 ### Equilibration CV restraints
 

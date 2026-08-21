@@ -101,35 +101,6 @@ def _resolve_single(
     return _resolve_atom_index(chain_map, top_atoms, spec, chain, substrate_chain_map)
 
 
-def _find_nearest_water_resid(
-    ref_spec:            dict,
-    chain_map:           dict,
-    top_atoms:           list,
-    top_residues:        list,
-    substrate_chain_map: dict,
-    chain:               str,
-    rst7_coords:         np.ndarray,
-) -> int:
-    """Return the 0-based resid of the WAT residue whose O is closest to ref_spec."""
-    from senda.analysis.distances import _resolve_atom_index
-
-    ref_idx = _resolve_atom_index(chain_map, top_atoms, ref_spec, chain, substrate_chain_map)
-    ref_xyz = rst7_coords[ref_idx - 1]
-
-    best_resid = None
-    best_dist  = float("inf")
-    for atom in top_atoms:
-        if atom.name == "O" and top_residues[atom.resid].name == "WAT":
-            d = float(np.sqrt(((rst7_coords[atom.index] - ref_xyz) ** 2).sum()))
-            if d < best_dist:
-                best_dist  = d
-                best_resid = atom.resid
-
-    if best_resid is None:
-        raise ValueError("No WAT residue found in topology -- cannot resolve nearest_water_to")
-    return best_resid
-
-
 def _resolve_nearest_water(
     ref_spec:            dict,
     water_atom_name:     str,
@@ -142,6 +113,7 @@ def _resolve_nearest_water(
 ) -> int:
     """Return 1-based index of water_atom_name in the WAT residue whose O is
     closest to ref_spec in rst7_coords."""
+    from senda.analysis.distances import _find_nearest_water_resid
     best_resid = _find_nearest_water_resid(
         ref_spec, chain_map, top_atoms, top_residues,
         substrate_chain_map, chain, rst7_coords,
@@ -199,6 +171,7 @@ def resolve_qm_region(
             )
         qmmask = inh_cfg["qmmask"]
         if _QMMASK_WATER_PLACEHOLDER in qmmask:
+            from senda.analysis.distances import _find_nearest_water_resid
             water_ref = inh_cfg.get("qmwater_neighbor")
             if not water_ref:
                 raise ValueError(
@@ -206,9 +179,18 @@ def resolve_qm_region(
                     "'qmwater_neighbor' (a {sequence/name} reference atom) "
                     "is not set."
                 )
+            qmwater_exclude = list(inh_cfg.get("qmwater_exclude") or [])
+            exclude_neighbor = inh_cfg.get("qmwater_exclude_neighbor")
+            if exclude_neighbor:
+                excl_resid = _find_nearest_water_resid(
+                    exclude_neighbor, chain_map, top_atoms, top_residues,
+                    substrate_chain_map, chain, rst7_coords,
+                )
+                qmwater_exclude.append(excl_resid + 1)
             resid = _find_nearest_water_resid(
                 water_ref, chain_map, top_atoms, top_residues,
                 substrate_chain_map, chain, rst7_coords,
+                exclude_water=qmwater_exclude,
             )
             qmmask = qmmask.replace(_QMMASK_WATER_PLACEHOLDER, str(resid + 1))
         return qmmask, int(inh_cfg["qmcharge"])
