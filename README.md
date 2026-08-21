@@ -792,7 +792,42 @@ slurm:
 
   qmmm:           # senda-qmmm ntasks only (equil/scan/prod share it; string scales automatically)
     ntasks: 8       # MPI tasks for equil/scan/prod, and tasks-per-node for string
+```
 
+### Running on multiple clusters -- `slurm.profiles`
+
+If you move the same project between machines (e.g. a GPU cluster for classical MD, an HPC cluster for QM/MM), don't hand-edit `account`/`env_setup`/`cpu`/etc. back and forth or comment/uncomment blocks -- that's fragile (a stray line at the wrong nesting level silently stops working, e.g. a `qos:` left as a sibling of `cpu:` instead of inside it, with no error). Instead, wrap the whole `slurm:` block per machine under `profiles`, and pick the active one with a single key:
+
+```yaml
+slurm:
+  active_profile: marenostrum   # switch clusters by changing only this line
+
+  profiles:
+    bluepebble:
+      amber_module: "module load apps/amber/24"
+      account: CHEM031804
+      gpu:
+        partition: gpu
+        ntasks: 1
+        gres: gpu:1
+        time: "5-00:00:00"
+
+    marenostrum:
+      account: uv36
+      env_setup: |
+        module purge
+        module load compenv-gpp/intel2023-ompi
+        module load amber/24-ompi
+      cpu:
+        qos: gp_resa
+        time: "1-00:00:00"
+      qmmm:
+        ntasks: 8
+```
+
+Each profile is a complete, independent `slurm:` block -- nothing is merged or inherited between profiles, so include everything that machine's jobs need (a profile that never runs classical MD can simply omit `gpu:`/`amber_module`, for example). Configs that don't use `slurm.profiles` at all keep working exactly as before -- this is opt-in.
+
+```yaml
 # ---- QM/MM string method -----------------------------------------------------
 qmmm:
   string:

@@ -29,8 +29,10 @@ import yaml
 
 
 def _load_config(config_path: Path) -> dict:
+    from senda.config import resolve_slurm_profile
     with open(config_path) as fh:
-        return yaml.safe_load(fh)
+        cfg = yaml.safe_load(fh)
+    return resolve_slurm_profile(cfg)
 
 
 def _iter_pairs(cfg: dict, inh_filter: str | None, mut_filter: str | None):
