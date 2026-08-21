@@ -796,7 +796,7 @@ slurm:
 
 ### Running on multiple clusters -- `slurm.profiles`
 
-If you move the same project between machines (e.g. a GPU cluster for classical MD, an HPC cluster for QM/MM), don't hand-edit `account`/`env_setup`/`cpu`/etc. back and forth or comment/uncomment blocks -- that's fragile (a stray line at the wrong nesting level silently stops working, e.g. a `qos:` left as a sibling of `cpu:` instead of inside it, with no error). Instead, wrap the whole `slurm:` block per machine under `profiles`, and pick the active one with a single key:
+If you move the same project between machines (e.g. a GPU cluster for classical MD, an HPC cluster for QM/MM), don't hand-edit `account`/`env_setup`/`cpu`/etc. back and forth or comment/uncomment blocks -- that's fragile. Instead, wrap the whole `slurm:` block per machine under `profiles`, and pick the active one with a single key:
 
 ```yaml
 slurm:
