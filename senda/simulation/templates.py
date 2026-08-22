@@ -265,13 +265,9 @@ def make_restrainer(nmr_restraints: list[dict]) -> str:
 
 RUN_GPU_HEADER = """\
 #!/bin/bash
-#SBATCH --time=__WALLTIME__
 #SBATCH --nodes=1
-#SBATCH --ntasks=__NTASKS__
-#SBATCH --gres=__GRES__
-#SBATCH --partition=__PARTITION__
+__EXTRA_SBATCH__
 #SBATCH --job-name=__JOBNAME__
-__ACCOUNT_LINE__
 #SBATCH --output=__REPLICA_DIR__/slurm-%j.out
 #SBATCH --error=__REPLICA_DIR__/slurm-%j.err
 
@@ -284,13 +280,9 @@ DIR=__REPLICA_DIR__
 
 NVT_CLUSTER_HEADER = """\
 #!/bin/bash
-#SBATCH --time=__WALLTIME__
 #SBATCH --nodes=1
-#SBATCH --ntasks=__NTASKS__
-#SBATCH --gres=__GRES__
-#SBATCH --partition=__PARTITION__
+__EXTRA_SBATCH__
 #SBATCH --job-name=__JOBNAME__
-__ACCOUNT_LINE__
 #SBATCH --output=__JOBNAME__-%j.out
 #SBATCH --error=__JOBNAME__-%j.err
 

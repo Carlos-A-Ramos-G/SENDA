@@ -45,3 +45,43 @@ def resolve_slurm_profile(cfg: dict) -> dict:
     cfg = dict(cfg)
     cfg["slurm"] = profiles[active]
     return cfg
+
+
+# Fields placed explicitly by templates (as __NTASKS__, __TIME__, etc. --
+# QM/MM's string stage computes NTASKS_STRING from ntasks, for instance)
+# rather than emitted generically -- skipped by default so they're never
+# written out twice. Callers with no such reserved fields (e.g. classical
+# MD, where every field is a plain passthrough) can override this with
+# reserved=set().
+DEFAULT_SBATCH_RESERVED = {"ntasks", "time", "time_string", "cpus-per-task"}
+
+# Never a real SLURM flag -- purely a senda-internal key (the QM/MM
+# string stage's wall-time override). Always excluded regardless of what
+# a caller passes as reserved, since sbatch would reject an unrecognized
+# --time_string= option outright.
+_NEVER_A_FLAG = {"time_string"}
+
+
+def sbatch_lines(section: dict, reserved: "set | None" = None, **extra) -> str:
+    """
+    Build '#SBATCH --key=value' lines for whichever fields are present in
+    *section* (plus any keyword overrides), skipping *reserved* keys that
+    the caller places explicitly. Missing/empty fields are simply omitted
+    -- no placeholder comments, and no field is ever required.
+
+    This is the one place cluster-specific SLURM fields get turned into
+    #SBATCH lines -- don't hardcode a fixed required/optional field list
+    anywhere else; different clusters need different subsets (account,
+    partition, qos, gres, mem, ... are all genuinely optional depending
+    on the cluster).
+    """
+    if reserved is None:
+        reserved = DEFAULT_SBATCH_RESERVED
+    excluded = reserved | _NEVER_A_FLAG
+    fields = {**section, **extra}
+    lines = [
+        f"#SBATCH --{key}={value}"
+        for key, value in fields.items()
+        if key not in excluded and value not in (None, "")
+    ]
+    return "\n".join(lines)

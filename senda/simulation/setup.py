@@ -49,6 +49,7 @@ from .templates import (
     RUN_BODY, NVT_JOB_BODY,
     fill,
 )
+from senda.config import sbatch_lines
 
 _SUBDIRS = ("00_prep", "01_min", "02_heat", "03_equil", "04_NVT")
 
@@ -313,14 +314,13 @@ def _write_run_scripts(
     if mode == "cluster":
         module   = slurm["amber_module"]
         slurm_gpu = slurm["gpu"]
-        account  = slurm.get("account") or ""
-        account_line = f"#SBATCH --account={account}" if account else ""
+        extra_sbatch = sbatch_lines(
+            slurm_gpu, reserved=set(), account=slurm.get("account") or "",
+        )
 
         header = fill(RUN_GPU_HEADER,
-            WALLTIME=slurm_gpu["time"], NTASKS=slurm_gpu["ntasks"],
-            GRES=slurm_gpu["gres"], PARTITION=slurm_gpu["partition"],
             JOBNAME=_job_name(inh, mut, rep),
-            ACCOUNT_LINE=account_line, MODULE=module,
+            EXTRA_SBATCH=extra_sbatch, MODULE=module,
             REPLICA_DIR=str(replica_dir.resolve()),
         )
         body = fill(RUN_BODY,
@@ -340,10 +340,8 @@ def _write_run_scripts(
             end      = min(job_idx * cpj, total)
             next_job = f"\nsbatch run_NVT_{job_idx + 1}.cmd" if end < total else ""
             nvt_header = fill(NVT_CLUSTER_HEADER,
-                WALLTIME=slurm_gpu["time"], NTASKS=slurm_gpu["ntasks"],
-                GRES=slurm_gpu["gres"], PARTITION=slurm_gpu["partition"],
                 JOBNAME=_job_name(inh, mut, rep, chunk=job_idx),
-                ACCOUNT_LINE=account_line, MODULE=module,
+                EXTRA_SBATCH=extra_sbatch, MODULE=module,
             )
             nvt_body = fill(NVT_JOB_BODY,
                 START=start, END=end, TOTAL=total,

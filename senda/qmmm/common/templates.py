@@ -6,33 +6,15 @@ All placeholders use the __KEY__ convention; replaced by fill().
 """
 
 
+from senda.config import sbatch_lines  # noqa: F401 -- re-exported for callers of this module
+
+
 def fill(template: str, **kwargs) -> str:
     """Replace __KEY__ placeholders in template with str(value)."""
     result = template
     for key, value in kwargs.items():
         result = result.replace(f"__{key}__", str(value))
     return result
-
-
-# Keys placed explicitly by templates (as __NTASKS__, __TIME__, etc.) rather
-# than emitted generically -- skipped so they're never written out twice.
-_SBATCH_RESERVED = {"ntasks", "time", "time_string", "cpus-per-task"}
-
-
-def sbatch_lines(section: dict, **extra) -> str:
-    """
-    Build '#SBATCH --key=value' lines for whichever fields are present in
-    *section* (plus any keyword overrides), skipping reserved keys that
-    templates place explicitly. Missing/empty fields are simply omitted --
-    no placeholder comments.
-    """
-    fields = {**section, **extra}
-    lines = [
-        f"#SBATCH --{key}={value}"
-        for key, value in fields.items()
-        if key not in _SBATCH_RESERVED and value not in (None, "")
-    ]
-    return "\n".join(lines)
 
 
 # Default __ENV_SETUP__ content, used only when slurm.env_setup is absent
