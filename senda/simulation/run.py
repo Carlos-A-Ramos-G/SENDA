@@ -24,8 +24,10 @@ def _load_config(config_path: Path) -> dict:
     if not config_path.exists():
         sys.exit(f"Config not found: {config_path}")
     import yaml
+    from senda.config import resolve_slurm_profile
     with open(config_path) as fh:
-        return yaml.safe_load(fh) or {}
+        cfg = yaml.safe_load(fh) or {}
+    return resolve_slurm_profile(cfg)
 
 
 def main() -> None:

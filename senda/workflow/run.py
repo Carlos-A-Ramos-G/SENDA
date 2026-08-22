@@ -193,8 +193,10 @@ def main() -> None:
     except ImportError:
         sys.exit("pyyaml is required: pip install pyyaml")
 
+    from senda.config import resolve_slurm_profile
     with open(config_path) as fh:
         cfg = yaml.safe_load(fh) or {}
+    cfg = resolve_slurm_profile(cfg)
 
     slurm = cfg.get("slurm") or {}
     if not slurm:
