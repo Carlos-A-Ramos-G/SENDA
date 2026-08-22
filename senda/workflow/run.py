@@ -72,8 +72,15 @@ def _header(
 # Individual SLURM script generators
 # ---------------------------------------------------------------------------
 
+def _cpu_spec(slurm: dict) -> dict:
+    """slurm.cpu if set, else fall back to slurm.gpu -- for GPU-only
+    clusters with no separate CPU partition, so param/complex/launch
+    jobs don't need a redundant, duplicated cpu: block."""
+    return slurm.get("cpu") or slurm["gpu"]
+
+
 def _param_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = {**slurm["cpu"], "account": slurm.get("account", "")}
+    spec      = {**_cpu_spec(slurm), "account": slurm.get("account", "")}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_param",
@@ -87,7 +94,7 @@ def _param_script(slurm: dict, config: str, out_dir: str) -> str:
 
 
 def _complex_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = {**slurm["cpu"], "account": slurm.get("account", "")}
+    spec      = {**_cpu_spec(slurm), "account": slurm.get("account", "")}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_complex",
@@ -100,7 +107,7 @@ def _complex_script(slurm: dict, config: str, out_dir: str) -> str:
 
 
 def _launch_script(slurm: dict, config: str, out_dir: str, force: bool = False) -> str:
-    spec      = {**slurm["cpu"], "account": slurm.get("account", "")}
+    spec      = {**_cpu_spec(slurm), "account": slurm.get("account", "")}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_launch",
@@ -219,12 +226,14 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Validate required slurm sections
-    if not slurm.get("cpu"):
-        sys.exit("Error: slurm.cpu section is required")
-    _require_keys(slurm["cpu"], ["time", "partition"], "cpu")
     if not slurm.get("gpu"):
         sys.exit("Error: slurm.gpu section is required")
     _require_keys(slurm["gpu"], ["time", "partition", "gres"], "gpu")
+    # slurm.cpu is optional -- on GPU-only clusters (no separate CPU
+    # partition), param/complex/launch jobs fall back to slurm.gpu's
+    # settings instead of needing a redundant, duplicated cpu: block.
+    if slurm.get("cpu"):
+        _require_keys(slurm["cpu"], ["time", "partition"], "cpu")
     if not args.skip_param and not slurm.get("amber_module"):
         sys.exit("Error: slurm.amber_module is required for senda-param")
 
@@ -248,11 +257,12 @@ def main() -> None:
                _submit_script(args.skip_param, str(out_dir)))
 
     # Report
+    cpu_time = _cpu_spec(slurm)["time"]
     print(f"Generated in {out_dir}/:")
     if not args.skip_param:
-        print(f"  senda_param.sh   -ligand parameterization  [{slurm['cpu']['time']}]")
-    print(f"  senda_complex.sh -Michaelis complex prep    [{slurm['cpu']['time']}]")
-    print(f"  senda_launch.sh  -sim setup + replica sbatch [{slurm['cpu']['time']}]")
+        print(f"  senda_param.sh   -ligand parameterization  [{cpu_time}]")
+    print(f"  senda_complex.sh -Michaelis complex prep    [{cpu_time}]")
+    print(f"  senda_launch.sh  -sim setup + replica sbatch [{cpu_time}]")
     print(f"  submit.sh        -top-level submission script")
     print()
     if args.skip_param:
