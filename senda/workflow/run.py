@@ -25,6 +25,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from senda.config import sbatch_lines
+
 
 # ---------------------------------------------------------------------------
 # SLURM header builder
@@ -38,21 +40,14 @@ def _header(
     modules:    list[str] | None = None,
     senda_env:  str = "",
 ) -> str:
-    """Build the SBATCH preamble for a SLURM script."""
+    """Build the SBATCH preamble for a SLURM script. Every SLURM field in
+    *spec* (time, ntasks, partition, account, qos, mem, gres, ...) is
+    optional -- whatever's present is emitted, whatever's absent is
+    skipped, so this works regardless of which fields a given cluster
+    actually needs."""
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --time={spec['time']}",
-        f"#SBATCH --ntasks={spec.get('ntasks', 1)}",
-        f"#SBATCH --cpus-per-task={spec.get('cpus-per-task', 1)}",
-    ]
-    if spec.get("mem"):
-        lines.append(f"#SBATCH --mem={spec['mem']}")
-    if spec.get("gres"):
-        lines.append(f"#SBATCH --gres={spec['gres']}")
-    if spec.get("account"):
-        lines.append(f"#SBATCH --account={spec['account']}")
-    lines += [
-        f"#SBATCH --partition={spec['partition']}",
+        sbatch_lines(spec, reserved=set()),
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --output={out}",
         f"#SBATCH --error={err}",
@@ -166,19 +161,6 @@ def _submit_script(skip_param: bool, out_dir: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Validation helpers
-# ---------------------------------------------------------------------------
-
-def _require_keys(spec: dict, keys: list[str], section: str) -> None:
-    missing = [k for k in keys if not spec.get(k)]
-    if missing:
-        sys.exit(
-            f"Error: slurm.{section} is missing required keys: {missing}\n"
-            f"Add them to the slurm section of your config.yaml."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -221,15 +203,14 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Validate required slurm sections
+    # slurm.gpu must exist as a section (run_gpu/NVT jobs need a resource
+    # spec to build from -- and slurm.cpu falls back to it when absent),
+    # but no individual field within it is required: different clusters
+    # need different subsets of partition/gres/account/qos/etc, and
+    # whichever ones are present just get emitted, sbatch complains
+    # directly if something a cluster truly needs is still missing.
     if not slurm.get("gpu"):
         sys.exit("Error: slurm.gpu section is required")
-    _require_keys(slurm["gpu"], ["time", "partition", "gres"], "gpu")
-    # slurm.cpu is optional -- on GPU-only clusters (no separate CPU
-    # partition), param/complex/launch jobs fall back to slurm.gpu's
-    # settings instead of needing a redundant, duplicated cpu: block.
-    if slurm.get("cpu"):
-        _require_keys(slurm["cpu"], ["time", "partition"], "cpu")
     if not args.skip_param and not slurm.get("amber_module"):
         sys.exit("Error: slurm.amber_module is required for senda-param")
 
