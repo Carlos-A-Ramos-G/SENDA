@@ -547,20 +547,29 @@ def _analyse_chain(
             volumes = uc[:, 0] * uc[:, 1] * uc[:, 2]   # orthorhombic approximation
 
             for rdf_i, rr in enumerate(resolved_rdf):
-                center_idx_0 = [i - 1 for i in rr["center_indices"]]
-                centroids    = xyz[:, center_idx_0, :].mean(axis=1)  # (n_frames, 3)
-                wat_coords   = xyz[:, wat_o_idx, :]                  # (n_frames, n_wat, 3)
-                diff         = wat_coords - centroids[:, np.newaxis, :]
-                all_dists    = np.sqrt((diff ** 2).sum(axis=2))      # (n_frames, n_wat)
+                center_idx_0  = [i - 1 for i in rr["center_indices"]]
+                n_centers     = len(center_idx_0)
+                center_coords = xyz[:, center_idx_0, :]              # (n_frames, n_centers, 3)
+                wat_coords    = xyz[:, wat_o_idx, :]                 # (n_frames, n_wat, 3)
+                # Distance from every center atom to every water, independently --
+                # not the centroid of the center atoms. A centroid collapses
+                # multiple reference atoms into one drifting midpoint (wrong if
+                # those atoms move relative to each other, e.g. a distance
+                # spanning a reaction coordinate); pooling matches the standard
+                # multi-site RDF convention (e.g. VMD's RPDF tool).
+                diff      = wat_coords[:, np.newaxis, :, :] - center_coords[:, :, np.newaxis, :]
+                all_dists = np.sqrt((diff ** 2).sum(axis=3))         # (n_frames, n_centers, n_wat)
 
                 in_range = all_dists <= rr["r_max"]
                 rdf_hist[rdf_i] += np.histogram(all_dists[in_range], bins=rdf_edges[rdf_i])[0]
 
                 for fi in range(n_frames):
-                    rdf_frame_dists[rdf_i].append(all_dists[fi, in_range[fi]])
+                    rdf_frame_dists[rdf_i].append(all_dists[fi][in_range[fi]])
 
-                rdf_vol_sum[rdf_i]  += float(np.sum(volumes))
-                rdf_n_frames[rdf_i] += n_frames
+                # Each center atom contributes its own independent reference
+                # point per frame, so normalize per (frame, center) pair.
+                rdf_vol_sum[rdf_i]  += float(np.sum(volumes)) * n_centers
+                rdf_n_frames[rdf_i] += n_frames * n_centers
 
     if not frame_lookup:
         print(f"  No frames collected for chain {chain}, skipping")
