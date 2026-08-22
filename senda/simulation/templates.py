@@ -271,7 +271,7 @@ RUN_GPU_HEADER = """\
 #SBATCH --gres=__GRES__
 #SBATCH --partition=__PARTITION__
 #SBATCH --job-name=__JOBNAME__
-#SBATCH --account=__ACCOUNT__
+__ACCOUNT_LINE__
 #SBATCH --output=__REPLICA_DIR__/slurm-%j.out
 #SBATCH --error=__REPLICA_DIR__/slurm-%j.err
 
@@ -290,7 +290,7 @@ NVT_CLUSTER_HEADER = """\
 #SBATCH --gres=__GRES__
 #SBATCH --partition=__PARTITION__
 #SBATCH --job-name=__JOBNAME__
-#SBATCH --account=__ACCOUNT__
+__ACCOUNT_LINE__
 #SBATCH --output=__JOBNAME__-%j.out
 #SBATCH --error=__JOBNAME__-%j.err
 

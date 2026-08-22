@@ -313,13 +313,14 @@ def _write_run_scripts(
     if mode == "cluster":
         module   = slurm["amber_module"]
         slurm_gpu = slurm["gpu"]
-        account  = slurm["account"]
+        account  = slurm.get("account") or ""
+        account_line = f"#SBATCH --account={account}" if account else ""
 
         header = fill(RUN_GPU_HEADER,
             WALLTIME=slurm_gpu["time"], NTASKS=slurm_gpu["ntasks"],
             GRES=slurm_gpu["gres"], PARTITION=slurm_gpu["partition"],
             JOBNAME=_job_name(inh, mut, rep),
-            ACCOUNT=account, MODULE=module,
+            ACCOUNT_LINE=account_line, MODULE=module,
             REPLICA_DIR=str(replica_dir.resolve()),
         )
         body = fill(RUN_BODY,
@@ -342,7 +343,7 @@ def _write_run_scripts(
                 WALLTIME=slurm_gpu["time"], NTASKS=slurm_gpu["ntasks"],
                 GRES=slurm_gpu["gres"], PARTITION=slurm_gpu["partition"],
                 JOBNAME=_job_name(inh, mut, rep, chunk=job_idx),
-                ACCOUNT=account, MODULE=module,
+                ACCOUNT_LINE=account_line, MODULE=module,
             )
             nvt_body = fill(NVT_JOB_BODY,
                 START=start, END=end, TOTAL=total,
