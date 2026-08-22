@@ -51,9 +51,10 @@ def _header(
         lines.append(f"#SBATCH --gres={spec['gres']}")
     if spec.get("qos"):
         lines.append(f"#SBATCH --qos={spec['qos']}")
+    if spec.get("account"):
+        lines.append(f"#SBATCH --account={spec['account']}")
     lines += [
         f"#SBATCH --partition={spec['partition']}",
-        f"#SBATCH --account={spec['account']}",
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --output={out}",
         f"#SBATCH --error={err}",
@@ -72,7 +73,7 @@ def _header(
 # ---------------------------------------------------------------------------
 
 def _param_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = {**slurm["cpu"], "account": slurm["account"]}
+    spec      = {**slurm["cpu"], "account": slurm.get("account", "")}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_param",
@@ -86,7 +87,7 @@ def _param_script(slurm: dict, config: str, out_dir: str) -> str:
 
 
 def _complex_script(slurm: dict, config: str, out_dir: str) -> str:
-    spec      = {**slurm["cpu"], "account": slurm["account"]}
+    spec      = {**slurm["cpu"], "account": slurm.get("account", "")}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_complex",
@@ -99,7 +100,7 @@ def _complex_script(slurm: dict, config: str, out_dir: str) -> str:
 
 
 def _launch_script(slurm: dict, config: str, out_dir: str, force: bool = False) -> str:
-    spec      = {**slurm["cpu"], "account": slurm["account"]}
+    spec      = {**slurm["cpu"], "account": slurm.get("account", "")}
     senda_env = slurm.get("senda_env", "") or ""
     head      = _header(
         job_name  = "senda_launch",
@@ -218,8 +219,6 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Validate required slurm sections
-    if not slurm.get("account"):
-        sys.exit("Error: slurm.account is required")
     if not slurm.get("cpu"):
         sys.exit("Error: slurm.cpu section is required")
     _require_keys(slurm["cpu"], ["time", "partition"], "cpu")
