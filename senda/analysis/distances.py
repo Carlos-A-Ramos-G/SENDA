@@ -85,7 +85,9 @@ def _load_frame0_coords(top_path: Path, sim_base: Path) -> np.ndarray:
             f"No NVT trajectories found in {sim_base / 'replica_1' / '04_NVT'}; "
             "cannot perform geometric lookups"
         )
-    return pt.load(nc_files[0], top=str(top_path), frame_indices=[0]).xyz[0]
+    traj = pt.load(nc_files[0], top=str(top_path), frame_indices=[0])
+    pt.autoimage(traj)
+    return traj.xyz[0]
 
 
 # ---------------------------------------------------------------------------
