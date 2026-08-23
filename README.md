@@ -302,7 +302,7 @@ Generates a set of SLURM scripts and a top-level `submit.sh` that chains the ful
 ```
 senda-param    (optional, skip with --skip-param)
     -> afterok
-senda-complex
+senda-complex  (optional, skip with --skip-complex)
     -> afterok
 senda-launch   (runs senda-sim setup, then sbatch each replica's run_gpu)
     ->
@@ -313,7 +313,8 @@ senda-launch   (runs senda-sim setup, then sbatch each replica's run_gpu)
 
 ```bash
 senda-slurm --config config.yaml
-senda-slurm --config config.yaml --skip-param    # skip if parameters already exist
+senda-slurm --config config.yaml --skip-param      # skip if parameters already exist
+senda-slurm --config config.yaml --skip-complex    # skip if the Michaelis complex is already prepared
 senda-slurm --config config.yaml --out-dir workflow/
 ```
 
@@ -398,12 +399,15 @@ To find the correct AMBER resid for your ligand/substrate in `chains[0]`, inspec
 
 ### Water RDF
 
-`water_rdf` is an optional list of radial distribution function specifications. Each entry computes g(r) of WAT-O atoms around a reference point and uses the result to add a soft score penalty to frames that have no water near the first coordination shell peak.
+`water_rdf` is an optional list of radial distribution function specifications. Each entry computes g(r) of WAT-O atoms around one or more reference atoms and uses the result to add a soft score penalty to frames that have no water near the first coordination shell peak.
 
 ```yaml
 water_rdf:
   - label: "water_CYS145_SG"   # used in output file names
-    center_atoms:               # one or more atoms; multiple atoms use their centroid
+    center_atoms:               # one or more atoms; with multiple, each contributes
+                                 # its own independent distance to every water (not a
+                                 # centroid), matching the standard multi-site RDF
+                                 # convention (e.g. VMD's RPDF tool)
       - {sequence: 145, name: SG}
     r_max: 10.0                 # maximum radius in Angstroms (default 10.0)
     tolerance: 0.3              # half-width of the peak window in Angstroms (default 0.3)
