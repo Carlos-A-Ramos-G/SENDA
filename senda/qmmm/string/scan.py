@@ -8,8 +8,10 @@ Generates simulations/{inh}/{mut}/06_QMMM_scan/ containing:
   restr0       -- extra_restraints as AMBER &rst blocks (if any)
   restr{i}     -- per-node CV restraints (from guess) + restr0 appended in job
   scan.sh      -- SLURM job script (sequential over all nodes)
-  center.sh    -- cpptraj centering for one node; scan.sh calls it after
-                  each node's sander.MPI run finishes
+  center.sh    -- cpptraj centering for one node; scan.sh calls it on
+                  node 0 before the loop starts, then after every node's
+                  sander.MPI run -- each node starts from the previous
+                  node's centered structure, not the raw one
 """
 from __future__ import annotations
 

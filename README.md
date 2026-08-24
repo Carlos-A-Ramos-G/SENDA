@@ -507,7 +507,7 @@ simulations/{inhibitor}/{mutant}/
 |   +-- restr0                    # extra restraints appended per node by scan job
 |   +-- restr{1..N}               # per-node CV harmonic restraints
 |   +-- scan.sh                   # SLURM script (sequential node loop)
-|   +-- center.sh                 # cpptraj centering for one node; called by scan.sh after each node finishes
+|   +-- center.sh                 # cpptraj centering for one node; called by scan.sh on node 0 before the loop, then after every node -- each node starts from the previous node's centered structure
 +-- 07_QMMM_string/
     +-- in                        # AMBER string input (@NODE_SEED@ filled by in.sh)
     +-- in.sh                     # generates per-node {i}.in files + string.groupfile

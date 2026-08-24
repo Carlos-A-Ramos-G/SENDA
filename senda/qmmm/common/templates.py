@@ -195,11 +195,16 @@ else
   cp ../05_QMMM_equilibration/0e.rst7 0.rst7
 fi
 
+# Center once before the scan starts -- imaging fixes any PBC wrapping
+# carried over from equil/prod so restraints/CVs are well-defined from
+# node 1 onward, and seeds node 1's -c input below.
+bash center.sh 0
+
 for i in $(seq 1 $NODES); do
   sed -e "s/__NODE__/$i/g" in_template > in
   cat restr0 >> restr${i}
   srun --cpu-bind=cores sander.MPI \\
-      -O -rem 0 -i in -o ${i}.out -c $((i-1)).rst7 -r ${i}.rst7 \\
+      -O -rem 0 -i in -o ${i}.out -c $((i-1))_centred.rst7 -r ${i}.rst7 \\
       -x ${i}.nc -inf ${i}.mdinfo -p __PARM__
   if [ $? -ne 0 ]; then
     echo "ERROR: sander.MPI failed at node $i -- aborting." >&2
@@ -264,7 +269,7 @@ fi
 
 NODES=__N_NODES__
 PARM=__PARM_H10__
-REACT=../06_QMMM_scan/1_centred.rst7
+REACT=../06_QMMM_scan/0_centred.rst7
 PROD=../06_QMMM_scan/${NODES}_centred.rst7
 SEED=__SEED__
 
