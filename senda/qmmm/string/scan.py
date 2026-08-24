@@ -5,7 +5,7 @@ Stage 06: restrained QM/MM scan along the reaction path.
 
 Generates simulations/{inh}/{mut}/06_QMMM_scan/ containing:
   in_template  -- AMBER input with __NODE__ placeholder
-  restr0       -- extra_restraints as AMBER &rst blocks (if any)
+  restr0       -- scan.extra_restraints as AMBER &rst blocks (if any)
   restr{i}     -- per-node CV restraints (from guess) + restr0 appended in job
   scan.sh      -- SLURM job script (sequential over all nodes)
   center.sh    -- cpptraj centering for one node; scan.sh calls it on
@@ -90,8 +90,10 @@ def setup(
             blocks.append(build_rst_block(indices, target, cv_type, force_constant))
         (stage_dir / f"restr{node_i}").write_text("".join(blocks))
 
-    # Extra restraints file (appended to each restr{i} by the scan job)
-    extra = inh_cfg.get("extra_restraints") or []
+    # Extra restraints file (appended to each restr{i} by the scan job).
+    # Atom specs were already resolved during equil (only that stage has
+    # topology/chain_map access) and cached in stage metadata.
+    extra = meta.get("scan_extra_restraints") or []
     restr0_text = _build_extra_restr(extra)
     (stage_dir / "restr0").write_text(restr0_text)
 

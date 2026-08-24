@@ -8,6 +8,8 @@ Generates simulations/{inh}/{mut}/07_QMMM_string/ containing:
   in.sh     -- bash script: writes per-node {i}.in files and string.groupfile
   guess     -- string guess file (with AMBER header: N_nodes  N_cvs  0.0)
   CVs       -- AMBER CVs file (collective variables for sander ASM)
+  restr0    -- string.extra_restraints as AMBER &rst blocks (if any);
+               referenced by every node via DISANG
   string.sh -- SLURM job script
 """
 from __future__ import annotations
@@ -61,6 +63,14 @@ def setup(
     qmmm_cfg   = slurm_cfg.get("qmmm") or {}
     cpu_cfg    = slurm_cfg.get("cpu")  or {}
 
+    # Extra restraints file (referenced by every node's DISANG, if any).
+    # Atom specs were already resolved during equil (only that stage has
+    # topology/chain_map access) and cached in stage metadata.
+    extra = meta.get("string_extra_restraints") or []
+    restr0_text = _build_extra_restr(extra)
+    (stage_dir / "restr0").write_text(restr0_text)
+    has_restraints = bool(restr0_text.strip())
+
     # AMBER string input (seed resolved per-node by in.sh)
     seed = int(string_cfg.get("seed", 1234))
     in_text = fill(
@@ -79,6 +89,8 @@ def setup(
         PREP_STEPS       = string_cfg.get("prep_steps",       500),
         Z_BIAS           = str(string_cfg.get("z_bias", "false")).lower(),
         FORCE_CONSTANT_D = string_cfg.get("force_constant_d", 100.0),
+        NMROPT           = "\n  nmropt   = 1," if has_restraints else "",
+        DISANG           = "&wt type = 'END'/\nDISANG=restr0\n/\n" if has_restraints else "",
     )
     (stage_dir / "in").write_text(in_text)
 
@@ -129,3 +141,20 @@ def setup(
             capture_output=True, text=True, cwd=stage_dir,
         )
         print(f"  sbatch: {result.stdout.strip() or result.stderr.strip()}")
+
+
+def _build_extra_restr(extra_restraints: list) -> str:
+    if not extra_restraints:
+        return ""
+    lines = []
+    for r in extra_restraints:
+        atoms = " ".join(str(a) for a in r["atoms"])
+        lines.append("&rst")
+        lines.append(f" iat={atoms},")
+        lines.append(
+            f" r1={r['r1']:.4f}, r2={r['r2']:.4f}, "
+            f"r3={r['r3']:.4f}, r4={r['r4']:.4f},"
+        )
+        lines.append(f" rk2={r['rk2']:.2f}, rk3={r['rk3']:.2f},")
+        lines.append("/")
+    return "\n".join(lines) + "\n"

@@ -497,14 +497,14 @@ simulations/{inhibitor}/{mutant}/
 +-- _qmmm_string_meta.json        # resolved metadata shared across stages
 +-- 05_QMMM_equilibration/
 |   +-- in                        # AMBER QM/MM input
-|   +-- restr                     # extra_restraints + optional CV restraints (AMBER &rst blocks)
+|   +-- restr                     # equil.extra_restraints + optional CV restraints (AMBER &rst blocks)
 |   +-- equilibration.sh          # SLURM script
 +-- 05_QMMM_restraint_free/       # only present if senda-qmmm prod was run
 |   +-- in                        # AMBER QM/MM input (no restraints, irest=1)
 |   +-- prod.sh                   # SLURM script
 +-- 06_QMMM_scan/
 |   +-- in_template               # AMBER input with __NODE__ placeholder
-|   +-- restr0                    # extra restraints appended per node by scan job
+|   +-- restr0                    # scan.extra_restraints, appended per node by scan job
 |   +-- restr{1..N}               # per-node CV harmonic restraints
 |   +-- scan.sh                   # SLURM script (sequential node loop)
 |   +-- center.sh                 # cpptraj centering for one node; called by scan.sh on node 0 before the loop, then after every node -- each node starts from the previous node's centered structure
@@ -513,6 +513,7 @@ simulations/{inhibitor}/{mutant}/
     +-- in.sh                     # generates per-node {i}.in files + string.groupfile
     +-- guess                     # string guess with AMBER header (N_nodes  N_cvs  0.0)
     +-- CVs                       # AMBER CVs file for sander ASM
+    +-- restr0                    # extra_restraints, same restraints applied to every node (AMBER &rst blocks)
     +-- string.sh                 # SLURM script (sander.MPI -ng N -groupfile)
 ```
 
@@ -539,7 +540,9 @@ If `qmmask` is not set, senda selects the QM region automatically:
 
 Override by setting `qmmask` and `qmcharge` explicitly in the inhibitor config block.
 
-If a manually-set `qmmask` needs to include a catalytic water whose residue number isn't stable across mutants or re-selected representative frames (e.g. `senda-analyse` may pick a different frame each run), write `:__NEAREST_WATER__` as its residue selector and add `qmwater_neighbor: <ref_spec>`. The placeholder is resolved fresh every run to the WAT residue nearest `qmwater_neighbor` -- the same search `nearest_water_to` uses for CVs -- so it always points at the correct water even though its residue number changes.
+If a manually-set `qmmask` needs to include a catalytic water whose residue number isn't stable across mutants or re-selected representative frames (e.g. `senda-analyse` may pick a different frame each run), write `:__NEAREST_WATER__` as its residue selector. The placeholder is resolved fresh every run to a WAT residue found the same way a CV's `nearest_water_to` is, so it always points at the correct water even though its residue number changes.
+
+`qmwater_neighbor: <ref_spec>` is optional: if every CV that uses `nearest_water_to` agrees on the same ref spec, that's used automatically -- this guarantees the QM region gets the *same* water the CVs (and the H10 mass patch) actually use, instead of a hand-declared field that can silently drift out of sync with the CVs and end up embedding a different water in the QM region than the one driving the reaction coordinate. If the CVs reference more than one distinct water, or none at all, `qmwater_neighbor` must be set explicitly; if set, it must match one of the CVs' `nearest_water_to` refs (when any exist), or senda raises an error rather than silently using the mismatched water.
 
 To keep a specific water out of that search -- e.g. a conserved water buried in a non-reactive cavity that happens to be geometrically nearest -- two options, in the same inhibitor block as `qmwater_neighbor`/`qmmask`:
 
@@ -562,7 +565,7 @@ Both can be combined; the two exclusion sets are unioned.
 
 ### Equilibration CV restraints
 
-By default stage 05 runs unrestrained. Set `equil.restrain_cvs: true` (and optionally `equil.force_constant`, default `20.0`) to add a soft harmonic restraint on each CV, targeting the first row of the (interpolated) guess file -- the reactant-state geometry -- keeping equilibration close to the reaction path. Restraints are written to `restr` and combined with any `extra_restraints`; `nmropt`/`DISANG` are only added to the AMBER input when there's actually something to restrain.
+By default stage 05 runs unrestrained. Set `equil.restrain_cvs: true` (and optionally `equil.force_constant`, default `20.0`) to add a soft harmonic restraint on each CV, targeting the first row of the (interpolated) guess file -- the reactant-state geometry -- keeping equilibration close to the reaction path. Restraints are written to `restr` and combined with any `equil.extra_restraints`; `nmropt`/`DISANG` are only added to the AMBER input when there's actually something to restrain.
 
 ### H10 topology
 
@@ -894,14 +897,25 @@ qmmm:
         # qmmask: "@1-50,301-310"
         # qmcharge: -1
 
-        extra_restraints:   # optional; appended to every restraint file
-          - atoms: [12, 34]
-            r1: 1.0
-            r2: 2.0
-            r3: 2.5
-            r4: 4.0
-            rk2: 50.0
-            rk3: 50.0
+        # Optional: extra fixed restraints (AMBER &rst blocks) for one
+        # specific stage. Nest under that stage's own equil:/scan:/string:
+        # block -- each stage's extra_restraints is independent, not shared
+        # with the others. Redeclaring a stage block here replaces the
+        # shared one above wholesale (no per-key merging), so repeat any
+        # other settings from that stage you still want to keep. Each
+        # entry in 'atoms' is either a raw 1-based AMBER atom index, or the
+        # same {sequence: ...}/{substrate_sequence: ...}/{nearest_water_to:
+        # ...} spec used for CV atoms -- resolved once during equil (the
+        # only stage with full topology access) and cached for scan/string:
+        # equil:
+        #   extra_restraints:
+        #     - atoms: [{sequence: 41, name: NE2}, 12]
+        #       r1: 1.0
+        #       r2: 2.0
+        #       r3: 2.5
+        #       r4: 4.0
+        #       rk2: 50.0
+        #       rk3: 50.0
 
         prod:               # stage 05_QMMM_restraint_free -- optional unrestrained production
           nstlim: 100000    # run length (default 100000 steps = 100 ps at dt=0.001)

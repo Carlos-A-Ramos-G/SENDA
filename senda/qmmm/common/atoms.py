@@ -130,11 +130,59 @@ def _resolve_nearest_water(
     )
 
 
+def resolve_extra_restraints(
+    restraint_specs:     list,
+    chain_map:           dict,
+    top_atoms:           list,
+    top_residues:        list,
+    substrate_chain_map: dict,
+    chain:               str,
+    rst7_coords:         np.ndarray,
+) -> list[dict]:
+    """
+    Resolve each restraint's 'atoms' entries to 1-based AMBER indices.
+
+    Raw integers pass through unchanged (already an atom index).
+    {sequence: ...} / {substrate_sequence: ...} / {nearest_water_to: ...}
+    dict specs are resolved via the same machinery CV atoms use.
+    """
+    resolved = []
+    for r in restraint_specs:
+        new_r = dict(r)
+        new_r["atoms"] = [
+            a if isinstance(a, int) else _resolve_single(
+                a, chain_map, top_atoms, top_residues,
+                substrate_chain_map, chain, rst7_coords,
+            )
+            for a in r["atoms"]
+        ]
+        resolved.append(new_r)
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # QM region auto-selection
 # ---------------------------------------------------------------------------
 
 _QMMASK_WATER_PLACEHOLDER = "__NEAREST_WATER__"
+
+
+def _canon_water_ref(ref_spec) -> frozenset:
+    """Normalize a nearest_water_to ref (single spec or list of specs) to an
+    order-independent, hashable form so two refs can be compared for
+    equality regardless of list ordering."""
+    specs = ref_spec if isinstance(ref_spec, list) else [ref_spec]
+    return frozenset(tuple(sorted(spec.items())) for spec in specs)
+
+
+def _cv_water_refs(cv_specs: list) -> list:
+    """Collect every nearest_water_to ref used by any CV atom."""
+    refs = []
+    for cv in cv_specs:
+        for atom_spec in cv.get("atoms", []):
+            if isinstance(atom_spec, dict) and "nearest_water_to" in atom_spec:
+                refs.append(atom_spec["nearest_water_to"])
+    return refs
 
 
 def resolve_qm_region(
@@ -147,6 +195,7 @@ def resolve_qm_region(
     substrate_chain_map: dict | None = None,
     chain:               str  | None = None,
     rst7_coords:          np.ndarray | None = None,
+    cv_specs:             list | None = None,
 ) -> tuple[str, int]:
     """
     Return (qmmask, qmcharge).
@@ -155,11 +204,22 @@ def resolve_qm_region(
     mask string contains the '__NEAREST_WATER__' placeholder (write it as
     ':__NEAREST_WATER__' -- the leading ':' is part of the mask, not the
     placeholder), it is replaced with the residue number of the WAT residue
-    nearest the atom declared in 'qmwater_neighbor' -- resolved fresh from
-    rst7_coords, same as a CV's nearest_water_to, so it stays correct across
-    mutants and re-selected representative frames. Requires the chain_map/
-    top_atoms/top_residues/substrate_chain_map/chain/rst7_coords arguments
-    in that case.
+    nearest 'qmwater_neighbor' -- resolved fresh from rst7_coords, same as a
+    CV's nearest_water_to, so it stays correct across mutants and
+    re-selected representative frames. Requires the chain_map/top_atoms/
+    top_residues/substrate_chain_map/chain/rst7_coords arguments in that
+    case.
+
+    'qmwater_neighbor' is optional: if every CV's nearest_water_to agrees on
+    one water, that's used automatically -- this guarantees the QM region's
+    water is the SAME one the CVs (and H10's mass patch) actually use,
+    rather than requiring it to be hand-declared and kept in sync
+    separately, which can silently drift out of sync (the QM region ending
+    up with a different water than the one driving the reaction coordinate).
+    If the CVs reference more than one distinct water, or none at all,
+    'qmwater_neighbor' must be set explicitly; if it IS set, it must match
+    one of the CVs' nearest_water_to refs (when any exist) or resolution is
+    rejected with an error, rather than silently allowing the mismatch.
 
     Otherwise: auto-select from CV atom seed residues via bond-graph expansion.
     """
@@ -172,12 +232,36 @@ def resolve_qm_region(
         qmmask = inh_cfg["qmmask"]
         if _QMMASK_WATER_PLACEHOLDER in qmmask:
             from senda.analysis.distances import _find_nearest_water_resid
+
+            cv_refs = _cv_water_refs(cv_specs or [])
+            distinct_cv_refs = {_canon_water_ref(r): r for r in cv_refs}
+
             water_ref = inh_cfg.get("qmwater_neighbor")
-            if not water_ref:
+            if water_ref is None:
+                if not distinct_cv_refs:
+                    raise ValueError(
+                        f"qmmask contains {_QMMASK_WATER_PLACEHOLDER!r} but "
+                        "'qmwater_neighbor' is not set and no CV uses "
+                        "nearest_water_to to infer it from."
+                    )
+                if len(distinct_cv_refs) > 1:
+                    raise ValueError(
+                        f"qmmask contains {_QMMASK_WATER_PLACEHOLDER!r} but "
+                        "'qmwater_neighbor' is not set, and the CVs reference "
+                        "more than one distinct water via nearest_water_to "
+                        "-- set 'qmwater_neighbor' explicitly to disambiguate "
+                        "which water belongs in the QM region."
+                    )
+                water_ref = next(iter(distinct_cv_refs.values()))
+            elif distinct_cv_refs and _canon_water_ref(water_ref) not in distinct_cv_refs:
                 raise ValueError(
-                    f"qmmask contains {_QMMASK_WATER_PLACEHOLDER!r} but "
-                    "'qmwater_neighbor' (a {sequence/name} reference atom) "
-                    "is not set."
+                    f"'qmwater_neighbor' ({water_ref!r}) does not match any "
+                    f"CV's nearest_water_to reference "
+                    f"({list(distinct_cv_refs.values())!r}) -- the QM region "
+                    "would then include a different water than the one used "
+                    "by the collective variables / H10 mass patch. Set "
+                    "'qmwater_neighbor' to match, or omit it to infer it "
+                    "automatically from the CVs."
                 )
             qmwater_exclude = list(inh_cfg.get("qmwater_exclude") or [])
             exclude_neighbor = inh_cfg.get("qmwater_exclude_neighbor")

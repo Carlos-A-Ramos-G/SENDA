@@ -112,6 +112,9 @@ DISANG=restr__NODE__
 
 # ---------------------------------------------------------------------------
 # AMBER input: string method (stage 07, seed replaced by in.sh)
+#
+# __NMROPT__  -- either "\n  nmropt   = 1," or "" (no extra restraints)
+# __DISANG__  -- either "&wt type = 'END'/\nDISANG=restr0\n/\n" or ""
 # ---------------------------------------------------------------------------
 
 STRING_IN = """\
@@ -132,7 +135,7 @@ string input file
   ntxo     = 1,
   ifqnt    = 1,
   ig       = @NODE_SEED@,
-  asm      = 1,
+  asm      = 1,__NMROPT__
  /
  &qmmm
   qmmask   = '__QMMASK__',
@@ -142,13 +145,12 @@ string input file
   qm_ewald = 1,
   writepdb = 1,
  /
-&wt type = 'END'/
-/
- &asm
-  preparation_steps = __PREP_STEPS__
-  guess_file = 'guess'
-  z_bias = .__Z_BIAS__.
-  force_constant_d = __FORCE_CONSTANT_D__
+__DISANG__ &asm
+  preparation_steps = __PREP_STEPS__,
+  guess_file = 'guess',
+  z_bias = .__Z_BIAS__.,
+  force_constant_d = __FORCE_CONSTANT_D__,
+ /
 """
 
 # ---------------------------------------------------------------------------

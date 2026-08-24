@@ -5,8 +5,8 @@ Stage 05: QM/MM equilibration setup.
 
 Generates simulations/{inh}/{mut}/05_QMMM_equilibration/ containing:
   in                -- AMBER QM/MM input
-  restr             -- extra_restraints, plus soft CV restraints targeting
-                       guess node 1 if equil.restrain_cvs is set (if any)
+  restr             -- equil.extra_restraints, plus soft CV restraints
+                       targeting guess node 1 if equil.restrain_cvs is set
   equilibration.sh  -- SLURM job script
 
 Also writes (at the mutant level):
@@ -24,6 +24,7 @@ from ..common.atoms import (
     resolve_cv_atoms_flat,
     resolve_cv_atoms_per_cv,
     resolve_qm_region,
+    resolve_extra_restraints,
     find_h10_atoms,
     count_protein_residues,
 )
@@ -62,6 +63,21 @@ def setup(
     chains      = mc_cfg.get("chains") or ["A"]
     chain       = chains[0]  # QM/MM uses chain A representative
 
+    # Per-stage config blocks, computed here (not just at their own stage)
+    # because extra_restraints atom specs for ALL three stages are resolved
+    # together below, while the topology/chain_map/substrate_chain_map are
+    # loaded -- scan/string don't have that context themselves, so their
+    # resolved restraints are cached in metadata for them to reuse.
+    string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
+    equil_cfg  = inh_cfg.get("equil")  or string_cfg_top.get("equil")  or {}
+    scan_cfg   = inh_cfg.get("scan")   or string_cfg_top.get("scan")   or {}
+    string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
+    extra_restraints_by_stage = {
+        "equil":  equil_cfg.get("extra_restraints")  or [],
+        "scan":   scan_cfg.get("extra_restraints")   or [],
+        "string": string_cfg.get("extra_restraints") or [],
+    }
+
     # Always build from the non-HMR topology, never structure_HMR.parm7:
     # the string method's mass-weighted path CV relies on H10 setting the
     # reactive hydrogens' mass to 10 amu relative to the true 1.008 amu
@@ -98,6 +114,8 @@ def setup(
 
     def _collect(atom_specs):
         for spec in atom_specs:
+            if not isinstance(spec, dict):
+                continue  # raw atom index in an extra_restraints list -- nothing to resolve
             if "nearest_water_to" in spec:
                 _collect([spec["nearest_water_to"]])
             elif "substrate_sequence" in spec:
@@ -110,6 +128,9 @@ def setup(
 
     for cv in cv_specs:
         _collect(cv["atoms"])
+    for restr_list in extra_restraints_by_stage.values():
+        for r in restr_list:
+            _collect(r["atoms"])
 
     substrate_chain_map: dict = {}
     if substrate_A_set:
@@ -128,6 +149,17 @@ def setup(
     )
     cv_indices_flat = [i for per_cv in cv_indices_per_cv for i in per_cv]
 
+    # Resolve extra_restraints atom specs for all three stages here (only
+    # equil has topology/chain_map/substrate_chain_map access); scan/string
+    # read their own resolved list back from cached stage metadata.
+    resolved_extra_restraints = {
+        stage: resolve_extra_restraints(
+            restr_list, chain_map, top_atoms, top_residues,
+            substrate_chain_map, chain, rst7_coords,
+        )
+        for stage, restr_list in extra_restraints_by_stage.items()
+    }
+
     # Print resolved CV atoms for verification
     print(f"\n  CV atoms resolved for {inh}/{mut} chain {chain}:")
     for cv, indices in zip(cv_specs, cv_indices_per_cv):
@@ -140,6 +172,7 @@ def setup(
         inh_cfg, cv_indices_flat, top_path,
         chain_map=chain_map, top_atoms=top_atoms, top_residues=top_residues,
         substrate_chain_map=substrate_chain_map, chain=chain, rst7_coords=rst7_coords,
+        cv_specs=cv_specs,
     )
 
     # H10 topology
@@ -148,9 +181,6 @@ def setup(
     generate_h10_topology(top_path, h10_atoms, h10_path)
 
     # Guess interpolation (write here so scan can reuse)
-    string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
-    string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
-    scan_cfg   = inh_cfg.get("scan")   or string_cfg_top.get("scan")   or {}
     n_nodes    = int(scan_cfg.get("n_nodes", string_cfg.get("n_nodes", 64)))
     guess_path = Path(inh_cfg["guess"]) if not Path(inh_cfg.get("guess", "")).is_absolute() \
         else Path(inh_cfg["guess"])
@@ -178,12 +208,10 @@ def setup(
     stage_dir = sim_base / "05_QMMM_equilibration"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
-    equil_cfg = inh_cfg.get("equil") or string_cfg_top.get("equil") or {}
-
-    # Restraints (restr file): extra_restraints (absolute atom indices), plus
-    # optional soft CV restraints targeting guess node 1 (the reactant-state
-    # geometry) when equil.restrain_cvs is set.
-    extra = inh_cfg.get("extra_restraints") or []
+    # Restraints (restr file): equil.extra_restraints (atom specs resolved
+    # above), plus optional soft CV restraints targeting guess node 1 (the
+    # reactant-state geometry) when equil.restrain_cvs is set.
+    extra = resolved_extra_restraints["equil"]
     restr_blocks = [_build_restr_file(extra)] if extra else []
 
     if equil_cfg.get("restrain_cvs"):
@@ -260,6 +288,8 @@ def setup(
         "h10_name":          h10_path.name,
         "scheme":            f"{inh}_{mut}",
         "cv_indices_per_cv": cv_indices_per_cv,
+        "scan_extra_restraints":   resolved_extra_restraints["scan"],
+        "string_extra_restraints": resolved_extra_restraints["string"],
     })
 
 
