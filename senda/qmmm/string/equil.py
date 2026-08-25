@@ -25,6 +25,7 @@ from ..common.atoms import (
     resolve_cv_atoms_per_cv,
     resolve_qm_region,
     resolve_extra_restraints,
+    resolve_qmwater_exclude,
     find_h10_atoms,
     count_protein_residues,
 )
@@ -117,7 +118,8 @@ def setup(
             if not isinstance(spec, dict):
                 continue  # raw atom index in an extra_restraints list -- nothing to resolve
             if "nearest_water_to" in spec:
-                _collect([spec["nearest_water_to"]])
+                ref = spec["nearest_water_to"]
+                _collect(ref if isinstance(ref, list) else [ref])
             elif "substrate_sequence" in spec:
                 substrate_A_set.add(spec["substrate_sequence"])
             elif "sequence" in spec:
@@ -131,6 +133,9 @@ def setup(
     for restr_list in extra_restraints_by_stage.values():
         for r in restr_list:
             _collect(r["atoms"])
+    exclude_neighbor_cfg = inh_cfg.get("qmwater_exclude_neighbor")
+    if exclude_neighbor_cfg:
+        _collect(exclude_neighbor_cfg if isinstance(exclude_neighbor_cfg, list) else [exclude_neighbor_cfg])
 
     substrate_chain_map: dict = {}
     if substrate_A_set:
@@ -142,10 +147,19 @@ def setup(
             coords=rst7_coords,
         )
 
+    # Resids to keep out of every nearest-water search below (CVs,
+    # extra_restraints, and the QM region) -- computed once so all three
+    # are guaranteed to agree on which water(s) to avoid.
+    qmwater_exclude = resolve_qmwater_exclude(
+        inh_cfg, chain_map, top_atoms, top_residues,
+        substrate_chain_map, chain, rst7_coords,
+    )
+
     # Resolve CV atom indices (chain A)
     cv_indices_per_cv = resolve_cv_atoms_per_cv(
         cv_specs, chain_map, top_atoms, top_residues,
         substrate_chain_map, chain, rst7_coords,
+        exclude_water=qmwater_exclude,
     )
     cv_indices_flat = [i for per_cv in cv_indices_per_cv for i in per_cv]
 
@@ -156,6 +170,7 @@ def setup(
         stage: resolve_extra_restraints(
             restr_list, chain_map, top_atoms, top_residues,
             substrate_chain_map, chain, rst7_coords,
+            exclude_water=qmwater_exclude,
         )
         for stage, restr_list in extra_restraints_by_stage.items()
     }
@@ -172,7 +187,7 @@ def setup(
         inh_cfg, cv_indices_flat, top_path,
         chain_map=chain_map, top_atoms=top_atoms, top_residues=top_residues,
         substrate_chain_map=substrate_chain_map, chain=chain, rst7_coords=rst7_coords,
-        cv_specs=cv_specs,
+        cv_specs=cv_specs, qmwater_exclude=qmwater_exclude,
     )
 
     # H10 topology

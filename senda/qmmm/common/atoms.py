@@ -43,12 +43,18 @@ def resolve_cv_atoms_per_cv(
     substrate_chain_map: dict,
     chain:               str,
     rst7_coords:         np.ndarray,
+    exclude_water:       list | None = None,
 ) -> list[list[int]]:
     """
     Resolve all CV atom specs to 1-based AMBER atom indices.
 
     Returns a list-of-lists: one inner list per CV, containing the resolved
     atom indices for that CV in the given chain.
+
+    exclude_water (1-based AMBER resids) is passed through to any
+    nearest_water_to spec, so CVs never select a water qmwater_exclude/
+    qmwater_exclude_neighbor was meant to keep out of consideration --
+    the same exclusion set the QM region uses.
     """
     result = []
     for cv in cv_specs:
@@ -56,6 +62,7 @@ def resolve_cv_atoms_per_cv(
             _resolve_single(
                 spec, chain_map, top_atoms, top_residues,
                 substrate_chain_map, chain, rst7_coords,
+                exclude_water=exclude_water,
             )
             for spec in cv["atoms"]
         ]
@@ -71,12 +78,13 @@ def resolve_cv_atoms_flat(
     substrate_chain_map: dict,
     chain:               str,
     rst7_coords:         np.ndarray,
+    exclude_water:       list | None = None,
 ) -> list[int]:
     """Flat list of all resolved 1-based atom indices across all CVs."""
     indices = []
     for per_cv in resolve_cv_atoms_per_cv(
         cv_specs, chain_map, top_atoms, top_residues,
-        substrate_chain_map, chain, rst7_coords,
+        substrate_chain_map, chain, rst7_coords, exclude_water=exclude_water,
     ):
         indices.extend(per_cv)
     return indices
@@ -90,12 +98,14 @@ def _resolve_single(
     substrate_chain_map: dict,
     chain:               str,
     rst7_coords:         np.ndarray,
+    exclude_water:       list | None = None,
 ) -> int:
     if "nearest_water_to" in spec:
         return _resolve_nearest_water(
             spec["nearest_water_to"], spec["name"],
             chain_map, top_atoms, top_residues,
             substrate_chain_map, chain, rst7_coords,
+            exclude_water=exclude_water,
         )
     from senda.analysis.distances import _resolve_atom_index
     return _resolve_atom_index(chain_map, top_atoms, spec, chain, substrate_chain_map)
@@ -110,13 +120,15 @@ def _resolve_nearest_water(
     substrate_chain_map: dict,
     chain:               str,
     rst7_coords:         np.ndarray,
+    exclude_water:       list | None = None,
 ) -> int:
     """Return 1-based index of water_atom_name in the WAT residue whose O is
-    closest to ref_spec in rst7_coords."""
+    closest to ref_spec in rst7_coords, skipping any resid in exclude_water."""
     from senda.analysis.distances import _find_nearest_water_resid
     best_resid = _find_nearest_water_resid(
         ref_spec, chain_map, top_atoms, top_residues,
         substrate_chain_map, chain, rst7_coords,
+        exclude_water=exclude_water,
     )
 
     for atom in top_atoms:
@@ -138,13 +150,15 @@ def resolve_extra_restraints(
     substrate_chain_map: dict,
     chain:               str,
     rst7_coords:         np.ndarray,
+    exclude_water:       list | None = None,
 ) -> list[dict]:
     """
     Resolve each restraint's 'atoms' entries to 1-based AMBER indices.
 
     Raw integers pass through unchanged (already an atom index).
     {sequence: ...} / {substrate_sequence: ...} / {nearest_water_to: ...}
-    dict specs are resolved via the same machinery CV atoms use.
+    dict specs are resolved via the same machinery CV atoms use, honoring
+    the same exclude_water set (see resolve_cv_atoms_per_cv).
     """
     resolved = []
     for r in restraint_specs:
@@ -153,11 +167,41 @@ def resolve_extra_restraints(
             a if isinstance(a, int) else _resolve_single(
                 a, chain_map, top_atoms, top_residues,
                 substrate_chain_map, chain, rst7_coords,
+                exclude_water=exclude_water,
             )
             for a in r["atoms"]
         ]
         resolved.append(new_r)
     return resolved
+
+
+def resolve_qmwater_exclude(
+    inh_cfg:             dict,
+    chain_map:           dict,
+    top_atoms:           list,
+    top_residues:        list,
+    substrate_chain_map: dict,
+    chain:               str,
+    rst7_coords:         np.ndarray,
+) -> list[int]:
+    """
+    Return the 1-based AMBER resids to exclude from every nearest-water
+    search in this inhibitor (CVs' nearest_water_to, extra_restraints, and
+    the QM region's qmwater_neighbor) -- combining 'qmwater_exclude'
+    (literal resids) and 'qmwater_exclude_neighbor' (resolved dynamically,
+    same search as nearest_water_to). Computed once and shared across all
+    of them so they can never disagree on which water(s) to avoid.
+    """
+    exclude = list(inh_cfg.get("qmwater_exclude") or [])
+    exclude_neighbor = inh_cfg.get("qmwater_exclude_neighbor")
+    if exclude_neighbor:
+        from senda.analysis.distances import _find_nearest_water_resid
+        excl_resid = _find_nearest_water_resid(
+            exclude_neighbor, chain_map, top_atoms, top_residues,
+            substrate_chain_map, chain, rst7_coords,
+        )
+        exclude.append(excl_resid + 1)
+    return exclude
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +240,7 @@ def resolve_qm_region(
     chain:               str  | None = None,
     rst7_coords:          np.ndarray | None = None,
     cv_specs:             list | None = None,
+    qmwater_exclude:      list | None = None,
 ) -> tuple[str, int]:
     """
     Return (qmmask, qmcharge).
@@ -220,6 +265,11 @@ def resolve_qm_region(
     'qmwater_neighbor' must be set explicitly; if it IS set, it must match
     one of the CVs' nearest_water_to refs (when any exist) or resolution is
     rejected with an error, rather than silently allowing the mismatch.
+
+    qmwater_exclude, if given, should be the resids from
+    resolve_qmwater_exclude() -- the SAME exclusion set applied to the CVs'
+    own nearest_water_to resolution, so the QM region and the CVs can never
+    disagree about which water(s) to avoid.
 
     Otherwise: auto-select from CV atom seed residues via bond-graph expansion.
     """
@@ -263,14 +313,6 @@ def resolve_qm_region(
                     "'qmwater_neighbor' to match, or omit it to infer it "
                     "automatically from the CVs."
                 )
-            qmwater_exclude = list(inh_cfg.get("qmwater_exclude") or [])
-            exclude_neighbor = inh_cfg.get("qmwater_exclude_neighbor")
-            if exclude_neighbor:
-                excl_resid = _find_nearest_water_resid(
-                    exclude_neighbor, chain_map, top_atoms, top_residues,
-                    substrate_chain_map, chain, rst7_coords,
-                )
-                qmwater_exclude.append(excl_resid + 1)
             resid = _find_nearest_water_resid(
                 water_ref, chain_map, top_atoms, top_residues,
                 substrate_chain_map, chain, rst7_coords,
