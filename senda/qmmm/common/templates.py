@@ -66,7 +66,7 @@ QM/MM stage 05
   qmcharge = __QMCHARGE__,
   qm_theory= '__QM_THEORY__',
   qmcut    = __QMCUT__,
-  qm_ewald = 0,
+  qm_ewald = 1,
   writepdb = 1,
  /
 __DISANG__"""
@@ -102,7 +102,7 @@ restrained window __NODE__
   qmcharge = __QMCHARGE__,
   qm_theory= '__QM_THEORY__',
   qmcut    = __QMCUT__,
-  qm_ewald = 0,
+  qm_ewald = 1,
   writepdb = 1,
  /
 &wt type = 'END'/
