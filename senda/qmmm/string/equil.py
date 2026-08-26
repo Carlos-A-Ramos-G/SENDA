@@ -26,6 +26,7 @@ from ..common.atoms import (
     resolve_qm_region,
     resolve_extra_restraints,
     resolve_qmwater_exclude,
+    resolve_stage_cfg,
     find_h10_atoms,
     count_protein_residues,
 )
@@ -70,9 +71,9 @@ def setup(
     # loaded -- scan/string don't have that context themselves, so their
     # resolved restraints are cached in metadata for them to reuse.
     string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
-    equil_cfg  = inh_cfg.get("equil")  or string_cfg_top.get("equil")  or {}
-    scan_cfg   = inh_cfg.get("scan")   or string_cfg_top.get("scan")   or {}
-    string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
+    equil_cfg  = resolve_stage_cfg(inh_cfg, string_cfg_top, "equil")
+    scan_cfg   = resolve_stage_cfg(inh_cfg, string_cfg_top, "scan")
+    string_cfg = resolve_stage_cfg(inh_cfg, string_cfg_top, "string")
     extra_restraints_by_stage = {
         "equil":  equil_cfg.get("extra_restraints")  or [],
         "scan":   scan_cfg.get("extra_restraints")   or [],

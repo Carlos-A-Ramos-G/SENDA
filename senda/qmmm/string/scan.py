@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from .equil import _load_stage_metadata
+from ..common.atoms import resolve_stage_cfg
 from ..common.cvs import build_rst_block
 from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
 
@@ -58,11 +59,11 @@ def setup(
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
-    scan_cfg = inh_cfg.get("scan") or string_cfg_top.get("scan") or {}
+    scan_cfg = resolve_stage_cfg(inh_cfg, string_cfg_top, "scan")
     force_constant = float(scan_cfg.get("force_constant", 100.0))
 
     # AMBER input template (NODE filled by scan.sh via sed)
-    equil_cfg = inh_cfg.get("equil") or string_cfg_top.get("equil") or {}
+    equil_cfg = resolve_stage_cfg(inh_cfg, string_cfg_top, "equil")
     in_text = fill(
         SCAN_IN_TEMPLATE,
         TEMP       = scan_cfg.get("temp",     equil_cfg.get("temp",     300.0)),

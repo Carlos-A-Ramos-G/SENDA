@@ -840,11 +840,13 @@ qmmm:
   string:
     # Shared defaults for all inhibitors below. Omit an inhibitor's own
     # equil/scan/string block entirely to inherit these; define one on the
-    # inhibitor to override it completely for that inhibitor (no per-key
-    # merging -- an inhibitor-level block replaces the shared one wholesale).
-    # qmcut works the same way: set it here once for every inhibitor, or
-    # override it on a specific inhibitor if it genuinely needs a different
-    # cutoff.
+    # inhibitor to override just the keys it declares -- any key it omits
+    # still falls back to the shared value here (per-key merge, like
+    # {**shared, **inhibitor}). So an inhibitor can add e.g. just
+    # extra_restraints under string: without repeating n_nodes/nstlim/etc.
+    # qmcut is a single value, not a block, so there's nothing to merge:
+    # set it here once for every inhibitor, or override it on a specific
+    # inhibitor if it genuinely needs a different cutoff.
     qmcut: 12.0           # QM electrostatic cutoff in Angstroms
 
     equil:              # stage 05 -- QM/MM equilibration
@@ -900,13 +902,14 @@ qmmm:
         # Optional: extra fixed restraints (AMBER &rst blocks) for one
         # specific stage. Nest under that stage's own equil:/scan:/string:
         # block -- each stage's extra_restraints is independent, not shared
-        # with the others. Redeclaring a stage block here replaces the
-        # shared one above wholesale (no per-key merging), so repeat any
-        # other settings from that stage you still want to keep. Each
-        # entry in 'atoms' is either a raw 1-based AMBER atom index, or the
-        # same {sequence: ...}/{substrate_sequence: ...}/{nearest_water_to:
-        # ...} spec used for CV atoms -- resolved once during equil (the
-        # only stage with full topology access) and cached for scan/string:
+        # with the others. Declaring a stage block here only overrides the
+        # keys you set; anything else (n_nodes, nstlim, ...) still falls
+        # back to the shared block above, so you can add just
+        # extra_restraints without repeating the rest. Each entry in
+        # 'atoms' is either a raw 1-based AMBER atom index, or the same
+        # {sequence: ...}/{substrate_sequence: ...}/{nearest_water_to: ...}
+        # spec used for CV atoms -- resolved once during equil (the only
+        # stage with full topology access) and cached for scan/string:
         # equil:
         #   extra_restraints:
         #     - atoms: [{sequence: 41, name: NE2}, 12]

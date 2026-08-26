@@ -1,7 +1,8 @@
 """
 senda.qmmm.common.atoms
 
-CV atom resolution, QM region auto-selection, and H10 hydrogen identification.
+CV atom resolution, QM region auto-selection, H10 hydrogen identification,
+and per-stage config resolution (equil/scan/string).
 
 Atom specs use the same syntax as analysis.reactive_distances:
   {sequence: N, name: atomname}         -- protein residue by PDB resnum
@@ -14,6 +15,22 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+
+
+def resolve_stage_cfg(inh_cfg: dict, string_cfg_top: dict, stage: str) -> dict:
+    """
+    Merge the shared qmmm.string.<stage> block with an inhibitor's own
+    <stage>: block, key by key -- the inhibitor's keys win; any key it
+    doesn't declare falls back to the shared block's value. Equivalent to
+    {**shared, **inhibitor}. Both may be absent (treated as {}).
+
+    An inhibitor can therefore declare e.g. just extra_restraints under
+    string: without repeating n_nodes/nstlim/seed/etc. to keep the shared
+    values for everything else.
+    """
+    shared    = string_cfg_top.get(stage) or {}
+    inh_stage = inh_cfg.get(stage) or {}
+    return {**shared, **inh_stage}
 
 
 # ---------------------------------------------------------------------------

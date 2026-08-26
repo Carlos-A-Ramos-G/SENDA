@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 from .equil import _load_stage_metadata
+from ..common.atoms import resolve_stage_cfg
 from ..common.cvs import write_string_guess, write_cvs_file
 from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP_STRING, STRING_IN, STRING_IN_SH, STRING_SLURM
 
@@ -57,8 +58,8 @@ def setup(
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
-    string_cfg = inh_cfg.get("string") or string_cfg_top.get("string") or {}
-    equil_cfg  = inh_cfg.get("equil")  or string_cfg_top.get("equil")  or {}
+    string_cfg = resolve_stage_cfg(inh_cfg, string_cfg_top, "string")
+    equil_cfg  = resolve_stage_cfg(inh_cfg, string_cfg_top, "equil")
     slurm_cfg  = cfg.get("slurm") or {}
     qmmm_cfg   = slurm_cfg.get("qmmm") or {}
     cpu_cfg    = slurm_cfg.get("cpu")  or {}
