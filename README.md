@@ -52,6 +52,8 @@ ligand PDBs       ->  senda-param   ->  GAFF parameters
                        senda-qmmm scan    ->  restrained path scan
                                                   |
                        senda-qmmm string  ->  free energy profile (ASM)
+                                                  |
+                       senda-integration string -> PMF integration (WHAM/MBAR)
 ```
 
 On an HPC cluster, use `senda-slurm` to chain all jobs automatically.
@@ -71,6 +73,7 @@ On an HPC cluster, use `senda-slurm` to chain all jobs automatically.
 | `senda-qmmm prod` | Stage 05_QMMM_restraint_free: optional unrestrained QM/MM production run after equilibration |
 | `senda-qmmm scan` | Stage 06: set up the restrained scan along the initial guess path |
 | `senda-qmmm string` | Stage 07: set up the adaptive string method (ASM) calculation |
+| `senda-integration string` | Integrate stage 07's sampling output into a PMF (WHAM/MBAR, chunked SE, plot) |
 
 ---
 
@@ -573,6 +576,55 @@ Hydrogen atoms in the CV definitions have their mass set to 10 amu in a modified
 
 ---
 
+## PMF integration -- `senda-integration`
+
+Integrates stage 07's (adaptive string method) sampling output into a potential of mean force (PMF): converts `07_QMMM_string/results/*_final.dat` to WHAM/MBAR/vFEP input, runs MBAR, splits the data into consecutive chunks to estimate the standard error, and plots the resulting PMF.
+
+### Prerequisites
+
+The external `ndfes`/`ndfes-PrintFES.py` tools must be in `$PATH`. Plotting requires matplotlib (`pip install -e ".[analysis]"`).
+
+### Run
+
+```bash
+senda-integration --config config.yaml string
+senda-integration --config config.yaml string -i NIR -m WT   # one inhibitor/mutant
+```
+
+Same inhibitor/mutant selection rules as `senda-qmmm`'s subcommands (see above).
+
+### Outputs
+
+All written inside the existing `simulations/{inhibitor}/{mutant}/07_QMMM_string/results/` directory:
+
+```
+results/
++-- wham/                  # WHAM-format per-window data + meta
++-- mbar/                  # ndfes-format meta, per-chunk MBAR runs, and:
+|   +-- mbar_PMF_<n_chunks>.PMF   # averaged PMF: rc, fe, se, weight, n_chunks
+|   +-- mbar_PMF_<n_chunks>.png   # PMF plot (mean +/- SE band)
++-- vfep/                  # same meta format as mbar/
+```
+
+The PMF is re-referenced to zero at the first free-energy minimum on the reactant (low-RC) side, so every chunk agrees exactly there and the standard error grows away from that anchor.
+
+### Configuration
+
+```yaml
+qmmm:
+  string:
+    integration:        # shared default for all inhibitors
+      n_chunks: 10       # number of consecutive-data chunks for the SE estimate
+    inhibitors:
+      NIR:
+        integration:     # optional per-inhibitor override (merged with the shared block)
+          n_chunks: 20
+```
+
+The temperature is not a separate setting -- it's read from the same `string.temp` (falling back to `equil.temp`, default `300.0`) the string simulation itself used, so it can never drift out of sync with the actual run.
+
+---
+
 ## Configuration reference
 
 All settings live in a single `config.yaml`.
@@ -874,6 +926,9 @@ qmmm:
       prep_steps: 500         # ASM preparation steps before string update
       z_bias: false           # Fortran logical (.false. / .true.)
       force_constant_d: 100.0 # string force constant
+
+    integration:        # senda-integration string -- PMF from stage 07's sampling
+      n_chunks: 10             # consecutive-data chunks for the SE estimate
 
     inhibitors:
       LER:
