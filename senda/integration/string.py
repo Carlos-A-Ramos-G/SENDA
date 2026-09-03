@@ -162,18 +162,18 @@ def run_mbar_chunks(results_dir: Path, n_chunks: int, temp: float) -> Path:
 
     mean_fe = fe_matrix.mean(axis=0)
 
-    # Zero energy to the first local minimum on the reactant (low-RC) side.
-    # A short moving average suppresses point-to-point MBAR noise (sub-kcal/mol
-    # wiggles) so the genuine reactant basin is picked rather than a noise dip.
-    def find_reactant_min_idx(fe, smooth_window=5):
-        kernel   = np.ones(smooth_window) / smooth_window
-        pad      = smooth_window // 2
-        smoothed = np.convolve(np.pad(fe, pad, mode="edge"), kernel, mode="valid")
-        for i in range(1, len(smoothed) - 1):
-            if smoothed[i] < smoothed[i - 1] and smoothed[i] < smoothed[i + 1]:
-                lo, hi = max(0, i - pad), min(len(fe), i + pad + 1)
-                return lo + int(np.argmin(fe[lo:hi]))
-        return int(np.argmin(fe))  # fallback: no interior minimum found
+    # Zero energy to the first basin on the reactant (low-RC) side: scan from
+    # low RC and return the first point that is the minimum within its own
+    # local window. The window (rather than a smoothed derivative) suppresses
+    # point-to-point MBAR noise without needing edge-padding, which was
+    # flattening out genuine basins located close to the start of the range.
+    def find_reactant_min_idx(fe, window=5):
+        half = window // 2
+        for i in range(len(fe)):
+            lo, hi = max(0, i - half), min(len(fe), i + half + 1)
+            if fe[i] == fe[lo:hi].min():
+                return i
+        return int(np.argmin(fe))  # unreachable: loop always finds a match
 
     ref_idx = find_reactant_min_idx(mean_fe)
     ref_val = mean_fe[ref_idx]
