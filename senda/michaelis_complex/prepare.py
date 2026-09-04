@@ -234,6 +234,7 @@ def prepare(
     residue_renames:   list[tuple[str, str]] | None = None,
     chains:            frozenset[str] = frozenset(("A", "B")),
     include_apo:       bool = True,
+    disulfides:        list[tuple[str, int, str, int]] | None = None,
 ) -> None:
     """
     Produce inhibitor complex and APO PDBs in *output_dir*.
@@ -249,11 +250,13 @@ def prepare(
     prot_map          : (chain, resnum) → resname from reference structure
     residue_renames   : [(from, to), …] applied before protonation
     chains            : chain IDs to retain
+    disulfides        : [(chain1, resnum1, chain2, resnum2), …] confirmed
+                        disulfide pairs, renamed to CYX
     """
     raw_lines = raw_pdb.read_text().splitlines(keepends=True)
 
     # 1. Clean: renames + protonation
-    cleaned = clean(raw_lines, prot_map, residue_renames, chains)
+    cleaned = clean(raw_lines, prot_map, residue_renames, chains, disulfides=disulfides)
 
     # 2. Align to reference frame
     rot, tran, rms = compute_superposition(cleaned, alignment_ref)
@@ -337,6 +340,7 @@ def prepare_all(
     residue_renames:      list[tuple[str, str]] | None = None,
     force:                bool = False,
     include_apo:          bool = True,
+    disulfides:           list[tuple[str, int, str, int]] | None = None,
 ) -> None:
     """
     Run :func:`prepare` for each entry in *structures*.
@@ -354,6 +358,8 @@ def prepare_all(
     chains                : chain IDs to retain
     residue_renames       : [(from, to), …] applied before protonation
     force                 : overwrite existing output files
+    disulfides            : [(chain1, resnum1, chain2, resnum2), …] confirmed
+                            disulfide pairs, renamed to CYX
     """
     # Read alignment reference once upfront so that overwriting WT outputs
     # does not corrupt it when WT is also listed in structures.
@@ -396,5 +402,6 @@ def prepare_all(
             output_dir, mutant,
             prot_map, residue_renames, chains,
             include_apo=include_apo,
+            disulfides=disulfides,
         )
         print(f"[{mutant}] done → {output_dir}/")

@@ -94,6 +94,7 @@ def main() -> None:
     protein_dir     = cwd / mc_cfg.get("output_dir", "protein")
     ligands_lib_dir = cwd / "ligands_libraries"
     simulations_dir = cwd / "simulations"
+    disulfides      = mc_cfg.get("disulfides") or []
 
     print(f"Mode            : {mode}")
     print(f"Protein dir     : {protein_dir}")
@@ -102,6 +103,7 @@ def main() -> None:
     print(f"Inhibitors      : {inhibitors}")
     print(f"Mutants         : {mutants}")
     print(f"Replicas        : {n_replicas}")
+    print(f"Disulfides      : {disulfides or '(none)'}")
 
     from .setup import setup_all, submit_all
 
@@ -111,6 +113,7 @@ def main() -> None:
             sim, slurm,
             protein_dir, ligands_lib_dir, simulations_dir,
             mode=mode, force=args.force,
+            disulfides=disulfides,
         )
         if args.submit:
             submit_all(inhibitors, mutants, n_replicas, simulations_dir, mode=mode)
