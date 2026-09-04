@@ -31,7 +31,7 @@ Restraints
   builds the AMBER DISANG file at job time after tleap creates the topology.
   nmr must be a dict keyed by inhibitor name; only that inhibitor's restraints
   are applied. Omit an inhibitor's key (or set it to an empty list) for no
-  NMR restraints for that ligand.
+  NMR restraints for that inhibitor.
 """
 
 from __future__ import annotations
@@ -169,7 +169,7 @@ def _render_leap_count(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> 
 # NMR restraint resolution
 # ---------------------------------------------------------------------------
 
-def _get_nmr_list(sim: dict, inh: str, has_ligand: bool) -> list:
+def _get_nmr_list(sim: dict, inh: str) -> list:
     """Return the NMR restraint list for *inh*.
 
     amber_simulator.restraints.nmr must be a dict keyed by inhibitor name:
@@ -179,9 +179,10 @@ def _get_nmr_list(sim: dict, inh: str, has_ligand: bool) -> list:
           - type: dihedral
             ...
         NIR: []        # empty list or omit the key entirely for no restraints
+
+    Not limited to ligand atoms -- a resname here can be protein, ligand, or
+    anything else in the topology, so this also works for APO systems.
     """
-    if not has_ligand:
-        return []
     raw = (sim.get("restraints") or {}).get("nmr")
     if not raw:
         return []
@@ -194,14 +195,53 @@ def _get_nmr_list(sim: dict, inh: str, has_ligand: bool) -> list:
     return raw.get(inh) or []
 
 
+def _resolve_nmr_chain_specs(nmr_list: list, pdb_path: Path) -> list:
+    """Replace atom specs' 'chain: <letter>' with the equivalent 'index'.
+
+    'chain' picks a residue occurrence by its actual PDB chain column (e.g.
+    chain: B), which is what a user means by "the copy in the other monomer."
+    'index' (0-based position among matching-resname residues, in topology
+    order) is what _atom_indices in templates.py actually consumes at job
+    runtime -- since tleap preserves residue order, that position matches the
+    dimer PDB's own residue order, so 'chain' can be resolved to it here
+    using only the PDB, before the topology exists.
+    """
+    pdb_residues = None  # parsed lazily, only if a spec actually uses 'chain'
+    resolved = []
+    for restraint in nmr_list:
+        new_atoms = []
+        for spec in restraint["atoms"]:
+            if "chain" in spec:
+                if "index" in spec:
+                    raise ValueError(
+                        f"atom spec for {spec['residue']}/{spec['name']} cannot "
+                        "set both 'chain' and 'index'"
+                    )
+                if pdb_residues is None:
+                    pdb_residues = _parse_pdb_residues(pdb_path)
+                occurrences = [c for c, _, rn in pdb_residues if rn == spec["residue"]]
+                if spec["chain"] not in occurrences:
+                    raise ValueError(
+                        f"chain {spec['chain']!r} not found for residue "
+                        f"{spec['residue']!r} in {pdb_path.name} "
+                        f"(occurrences found in chains: {occurrences})"
+                    )
+                spec = {**spec, "index": occurrences.index(spec["chain"])}
+                del spec["chain"]
+            new_atoms.append(spec)
+        resolved.append({**restraint, "atoms": new_atoms})
+    return resolved
+
+
 def _resolve_disulfide_bonds(disulfides: list[dict], pdb_path: Path) -> list[str]:
     """
     Return 'bond structure.<i>.SG structure.<j>.SG' lines for configured pairs.
 
-    <i>/<j> are 1-based positions in _parse_pdb_residues(pdb_path) order --
-    tleap assigns unit residue numbers sequentially in loadpdb file order, and
-    this dimer PDB has no residue coming before a Cys other than earlier
-    protein residues (ligand/water always come later).
+    <i>/<j> are 1-based positions in _parse_pdb_residues(pdb_path) order -- the
+    same "tleap preserves residue order" assumption _resolve_nmr_chain_specs
+    relies on above, since tleap assigns unit residue numbers sequentially in
+    loadpdb file order, and this dimer PDB has no residue coming before a Cys
+    other than earlier protein residues (ligand/water always come later).
 
     Hard-stops if a configured residue isn't found, if the same residue is
     used in more than one pair, or if the actual SG-SG distance in this PDB
@@ -264,8 +304,7 @@ def _resolve_disulfide_bonds(disulfides: list[dict], pdb_path: Path) -> list[str
 # AMBER input files
 # ---------------------------------------------------------------------------
 
-def _write_input_files(replica_dir: Path, inh: str, sim: dict,
-                       has_ligand: bool = True) -> str:
+def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
     """Write all AMBER .in files; return the topology filename."""
     use_hmr  = bool(sim.get("use_hmr", True))
     dt       = 0.004 if use_hmr else 0.002
@@ -273,7 +312,7 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict,
     temp     = float(sim["temperature"])
 
     restr_cfg  = sim.get("restraints", {}) or {}
-    nmr_list   = _get_nmr_list(sim, inh, has_ligand)
+    nmr_list   = _get_nmr_list(sim, inh)
     has_nmr    = bool(nmr_list) or bool(restr_cfg.get("custom_restrainer"))
 
     pos_cfg     = restr_cfg.get("positional", {}) or {}
@@ -356,11 +395,10 @@ def _write_run_scripts(
     inh: str, mut: str, rep: int,
     sim: dict, slurm: dict, topology: str,
     mode: str,
-    has_ligand: bool = True,
 ) -> None:
     use_hmr  = bool(sim.get("use_hmr", True))
     restr_cfg = sim.get("restraints", {}) or {}
-    has_nmr  = bool(_get_nmr_list(sim, inh, has_ligand)) or bool(restr_cfg.get("custom_restrainer"))
+    has_nmr  = bool(_get_nmr_list(sim, inh)) or bool(restr_cfg.get("custom_restrainer"))
 
     hmr_block = (
         "log '00_prep: HMR'\ncpptraj -i HMR.ccptraj"
@@ -531,7 +569,8 @@ def setup_replica(
         (replica_dir / "00_prep" / "HMR.ccptraj").write_text(HMR_CCPTRAJ)
 
     # NMR restrainer (runs at job time, after tleap builds the topology)
-    nmr_list        = _get_nmr_list(sim, inh, has_ligand)
+    nmr_list        = _get_nmr_list(sim, inh)
+    nmr_list        = _resolve_nmr_chain_specs(nmr_list, src_pdb)
     restr_cfg       = (sim.get("restraints") or {})
     custom_script   = restr_cfg.get("custom_restrainer")
     if custom_script:
@@ -544,11 +583,10 @@ def setup_replica(
         _write_exe(replica_dir / "restrainer.py", make_restrainer(nmr_list))
 
     # AMBER input files
-    topology = _write_input_files(replica_dir, inh, sim, has_ligand=has_ligand)
+    topology = _write_input_files(replica_dir, inh, sim)
 
     # Run scripts
-    _write_run_scripts(replica_dir, inh, mut, rep, sim, slurm, topology, mode,
-                       has_ligand=has_ligand)
+    _write_run_scripts(replica_dir, inh, mut, rep, sim, slurm, topology, mode)
 
 
 # ---------------------------------------------------------------------------

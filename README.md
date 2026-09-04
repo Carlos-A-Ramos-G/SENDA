@@ -292,7 +292,7 @@ Two types of restraints are supported, both optional:
 
 **Positional restraints** -- backbone atoms held during heating and NPT equilibration. The mask, heating weight, and per-cycle schedule are configurable.
 
-**NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Must be a dict keyed by inhibitor name; each inhibitor's restraints are applied only to that inhibitor's topology. Omit an inhibitor's key (or set it to `[]`) for no NMR restraints for that ligand.
+**NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Must be a dict keyed by inhibitor name; each inhibitor's restraints are applied only to that inhibitor's topology. Omit an inhibitor's key (or set it to `[]`) for no NMR restraints for that inhibitor. Not limited to ligand atoms -- a resname can be protein, ligand, or anything else in the topology, so this works for APO systems too.
 
 ---
 
@@ -741,7 +741,12 @@ amber_simulator:
     # inhibitor's topology. Omit the key or set it to [] for no restraints.
     # atoms: list of {residue: <resname>, name: <atomname>}
     # 2 atoms = distance, 3 = angle, 4 = dihedral
-    # Add index: <n> (0-based) for cross-residue atoms with multiple matches.
+    # If {residue, name} matches more than one residue instance (e.g. two
+    # copies of the same ligand in a dimer), disambiguate with chain: <letter>
+    # -- matches the PDB chain column of the dimer PDB fed to tleap (e.g.
+    # chain: B). Falls back to index: <n> (0-based occurrence position in
+    # topology order) for the rare case of multiple same-resname copies
+    # within the same chain.
     nmr:
       LER:
         - type: dihedral
