@@ -60,6 +60,9 @@ amber_simulator:
   use_hmr: true
   temperature: 300.0  # K
 
+  leap:
+    salt_molarity: 0.150   # enables SPLIT; omit or set to 0 for neutralization-only
+
   production:
     ns_per_chunk: 100
     total_chunks: 1
@@ -74,6 +77,7 @@ amber_simulator:
 
   heat:
     ps: 200
+    max_retries: 5
 
   equil:
     npt_ns: 1.25
@@ -97,8 +101,12 @@ amber_simulator:
     # NMR restraints (distance, angle, dihedral) written to an AMBER DISANG file.
     # Keyed by inhibitor name so each ligand can have different (or no) restraints.
     # Each entry specifies atoms as {residue: <resname>, name: <atomname>}.
-    # For cross-residue atoms that appear multiple times, add index: <n> (0-based)
-    # to disambiguate.
+    # If {residue, name} matches more than one residue instance (e.g. two
+    # copies of the same ligand in a dimer), disambiguate with chain: <letter>
+    # -- matches the PDB chain column of the dimer PDB fed to tleap (e.g.
+    # chain: B). Falls back to index: <n> (0-based occurrence position in
+    # topology order) for the rare case of multiple same-resname copies
+    # within the same chain.
     nmr:
       LER:
         - type: dihedral
@@ -217,46 +225,192 @@ analysis:
         penalty: 3.0
 
 # --- SLURM -------------------------------------------------------------------
+# Machine-specific settings live under slurm.profiles, one block per
+# cluster. Switch machines by changing active_profile alone -- nothing
+# else in this file needs to be touched, and there's no comment/uncomment
+# juggling (which is exactly how the qos field silently stopped working
+# before: a stray line left at the wrong nesting level).
 slurm:
-  # amber_module and env_setup are separate settings for two different
-  # job families -- often the same command, but not coupled, since a
-  # cluster could need a different module/version for either one.
+  active_profile: HPC_1   # <- change this to switch clusters
 
-  # Full shell command that makes pmemd.cuda available in the classical MD
-  # SLURM scripts (run_gpu, NVT chunks) -- not a bare module name.
-  amber_module: apps/amber/24
-  account: XXXXXXXXXX
+  profiles:
 
-  # Whatever this cluster needs before sander.MPI runs in the QM/MM SLURM
-  # scripts (equil/prod/scan/string) -- inserted verbatim in place of the
-  # entire preamble (hostname/srun numactl -s/module loads/exports), not
-  # appended to a default. If omitted, a sensible default is used
-  # (hostname, srun numactl -s, and the SRUN_CPUS_PER_TASK export) --
-  # setting env_setup replaces that default entirely, so include those
-  # lines yourself too if you still want them.
-  env_setup: |
-    hostname
-    srun numactl -s
-    module load apps/amber/24
+    HPC_1:   # GPU cluster: param/complex/launcher jobs and classical MD (run_gpu, NVT chunks)
+      # Full shell command that makes pmemd.cuda available in the classical MD
+      # SLURM scripts (run_gpu, NVT chunks) -- not a bare module name.
+      amber_module: "module load amber/24"
+      account: XXXXXXXXXX
 
-    export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
+      gpu:                       # run_gpu (stages 00-03) and NVT production chunks
+        partition: gpu
+        ntasks: 1
+        gres: gpu:1
+        time: "5-00:00:00"
 
-  # Optional: shell command to activate the environment where senda is installed.
-  # Inserted into senda-complex and senda-launch scripts before any senda-* call.
-  # Examples: "conda activate senda" | "module load python/3.11"
-  senda_env: ""
+      cpu:                     # param, complex, launcher jobs
+        partition: xxxxx       # optional; omit to leave unset
+        cpus-per-task: 4       # only used by param/complex/launcher jobs
+        mem: "8G"              # optional; if set, applies to every cpu job including senda-qmmm
+        time: "4:00:00"        # default wall time (param/complex/launcher, and equil/scan/prod)
 
-  cpu:                         # param, complex, launcher jobs, AND all senda-qmmm stages
-    partition: xxxxx            # optional; omit to leave unset
-    # qos: xxxxx                # optional; omit to leave unset
-    ntasks: 1
-    cpus-per-task: 4             # only used by param/complex/launcher jobs
-    mem: "8G"                    # optional; if set, applies to every cpu job including senda-qmmm
-    time: "4:00:00"              # default wall time (param/complex/launcher, and equil/scan/prod)
-    # time_string: "7-00:00:00"  # override: wall time specifically for the string method job (07)
+    HPC_2:   # CPU cluster: senda-qmmm string-method stages (equil/scan/string)
+      account: XXXXXXXXXX
 
-  gpu:                         # run_gpu (stages 00-03) and NVT production chunks
-    partition: gpu
-    ntasks: 1
-    gres: gpu:1
-    time: "5-00:00:00"
+      # Whatever this cluster needs before sander.MPI runs in the QM/MM
+      # SLURM scripts (equil/prod/scan/string) -- inserted verbatim in
+      # place of the entire preamble (hostname/srun numactl -s/module
+      # loads/exports), not appended to a default. If omitted, a sensible
+      # default is used (hostname, srun numactl -s, and the
+      # SRUN_CPUS_PER_TASK export) -- setting env_setup replaces that
+      # default entirely, so include those lines yourself too if you
+      # still want them.
+      env_setup: |
+        module purge
+        module load compiler-suite
+        module load amber/24
+
+      cpu:                       # all senda-qmmm stages
+        partition: xxxxx          # optional; omit to leave unset
+        # qos: xxxxx              # optional; omit to leave unset
+        mem: "8G"
+        time: "1-00:00:00"        # default wall time for equil/scan/prod
+        # time_string: "3-00:00:00"  # override: wall time specifically for the string method job (07)
+
+      # qmmm.ntasks intentionally omitted here: senda-qmmm defaults to
+      # ntasks=8 for equil/scan and ntasks-per-node=2 for string, which
+      # already match a real completed run at n_nodes=64. Set qmmm.ntasks
+      # under a profile's cpu: block only if your cluster needs something
+      # different.
+
+# --- QM/MM string method -----------------------------------------------------
+qmmm:
+  string:
+    # Shared defaults for all inhibitors below. Omit an inhibitor's own
+    # equil/scan/string block entirely to inherit these; define one on the
+    # inhibitor to override just the keys it declares -- any key it omits
+    # still falls back to the shared value here (per-key merge, like
+    # {**shared, **inhibitor}). So an inhibitor can add e.g. just
+    # extra_restraints under string: without repeating n_nodes/nstlim/etc.
+    # qmcut is a single value, not a block, so there's nothing to merge:
+    # set it here once for every inhibitor, or override it on a specific
+    # inhibitor if it genuinely needs a different cutoff.
+    qmcut: 10.0           # QM electrostatic cutoff in Angstroms
+
+    equil:              # stage 05 -- QM/MM equilibration
+      temp: 300.0
+      nstlim: 5000
+      dt: 0.001
+      gamma_ln: 5.0
+      ntpr: 50
+      ntwx: 100
+      ntwr: 100
+      restrain_cvs: true    # soft harmonic restraints on the CVs, targeting guess node 1
+      force_constant: 20.0  # kcal/mol/A^2 (or /rad^2 for angle/dihedral)
+
+    scan:               # stage 06 -- restrained scan
+      n_nodes: 64             # number of windows; must equal string.n_nodes
+      force_constant: 100.0   # harmonic force constant (kcal/mol/A^2 or /rad^2)
+      nstlim: 1000
+      dt: 0.001
+      gamma_ln: 5.0
+
+    string:             # stage 07 -- adaptive string method
+      n_nodes: 64        # currently unused -- string.py always reads the node count
+                         # from scan's cached meta, so this must match scan.n_nodes
+                         # above but has no effect of its own (known issue)
+      nstlim: 10000000
+      dt: 0.001
+      gamma_ln: 5.0
+      seed: 1234              # base random seed; each node gets seed + node_index
+      prep_steps: 2000        # ASM preparation steps before string update
+      z_bias: true            # Fortran logical (.false. / .true.)
+      force_constant_d: 100.0 # string force constant
+
+    inhibitors:
+      NIR:
+        mutants:   # subset of top-level mutants to run; omit key for all
+
+        collective_variables:
+          - type: distance        # distance | angle | dihedral
+            atoms:
+              - {sequence: 145, name: SG}
+              - {sequence: 145, name: HG}
+          - type: distance
+            atoms:
+              - {sequence: 145, name: HG}
+              - {sequence:  41, name: NE2}
+          - type: distance
+            atoms:
+              - {sequence: 145, name: HG}
+              - {nearest_water_to: [{sequence: 41, name: NE2}, {substrate_sequence: 614, name: NC}], name: O}
+          - type: distance
+            atoms:
+              - {nearest_water_to: [{sequence: 41, name: NE2}, {substrate_sequence: 614, name: NC}], name: O}
+              - {nearest_water_to: [{sequence: 41, name: NE2}, {substrate_sequence: 614, name: NC}], name: H1}
+          - type: distance        # distance | angle | dihedral
+            atoms:
+              - {nearest_water_to: [{sequence: 41, name: NE2}, {substrate_sequence: 614, name: NC}], name: H1}
+              - {substrate_sequence: 614, name: NC}
+          - type: distance
+            atoms:
+              - {sequence: 145, name: SG}
+              - {substrate_sequence: 614, name: C19}
+          - type: distance
+            atoms:
+              - {substrate_sequence: 614, name: C19}
+              - {substrate_sequence: 614, name: NC}
+
+        guess: guesses/NIR_path.dat   # initial path; interpolated to n_nodes automatically
+
+        # Optional: override automatic QM region selection.
+        # If set, qmcharge must also be provided.
+        # ':__NEAREST_WATER__' is resolved per mutant/frame to the WAT residue
+        # nearest qmwater_neighbor (same search used by nearest_water_to in
+        # the CVs above), so the QM region stays correct even though the
+        # water's residue number changes between mutants/frames.
+        # qmwater_neighbor omitted -- the CVs above all agree on one
+        # nearest_water_to ref, so it's auto-derived from them, guaranteeing
+        # the QM region uses the same water the CVs/H10 mass patch do.
+        qmmask: ":41,145&!@C,O | :40,144&@C,O | :__NEAREST_WATER__ | :614&@NC,C19,C12,H3,NP1,H30,C8,OP2,C16,C17,C20,C23,NSP1,C21,OSP1,H13,H14,H15,H17,H19,H18,H32,H16"
+        qmcharge: 0
+        qmwater_exclude_neighbor:   # excludes the conserved/buried water nearest this pocket
+          - {sequence: 41,  name: HD1}
+          - {sequence: 164, name: ND1}
+
+        # Optional: extra fixed restraints (AMBER &rst blocks) for one specific
+        # stage. Nest under that stage's own equil:/scan:/string: block -- each
+        # stage's extra_restraints is independent, not shared with the others.
+        # Atoms may be a raw 1-based AMBER index or a {sequence:...}/
+        # {substrate_sequence:...}/{nearest_water_to:...} spec, resolved the
+        # same way CV atoms are. NOT used in the completed WT production run
+        # below -- shown here purely as a worked example of the syntax, using
+        # this system's own atoms (a flat-bottom "floor" restraint keeping the
+        # reactive water's H1 from clashing with its partner atoms below 1.8 A;
+        # r3=r4=999/rk3=0 leaves no ceiling). Defined once under equil: with a
+        # YAML anchor and reused via alias under scan:/string: so one edit
+        # updates all three.
+        #
+        # equil:
+        #   extra_restraints: &water_h1_no_clash
+        #     - atoms:
+        #         - nearest_water_to:
+        #             - {sequence: 41, name: NE2}
+        #             - {substrate_sequence: 614, name: NC}
+        #           name: H1
+        #         - {sequence: 145, name: SG}
+        #       r1: 0.0
+        #       r2: 1.8
+        #       r3: 2.8
+        #       r4: 10.0
+        #       rk2: 50.0
+        #       rk3: 0.0
+        #
+        # scan:
+        #   extra_restraints: *water_h1_no_clash
+        #
+        # string:
+        #   extra_restraints: *water_h1_no_clash
+
+        # equil/scan/string blocks omitted above (apart from the commented
+        # example) -- everything inherits the shared qmmm.string.equil/scan/
+        # string blocks defined earlier in this file.
