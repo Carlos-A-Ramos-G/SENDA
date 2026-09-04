@@ -43,7 +43,17 @@ ligand PDBs       ->  senda-param   ->  GAFF parameters
                                                   |
                        senda-sim    ->  AMBER MD replicas
                                                   |
-                       senda-analyse ->  representative frame for QM/MM
+                       senda-analyse ->  representative frame (rst7)
+                                                  |
+                       senda-qmmm equil   ->  QM/MM equilibration
+                                                  |
+                       senda-qmmm prod    ->  restraint-free production (optional)
+                                                  |
+                       senda-qmmm scan    ->  restrained path scan
+                                                  |
+                       senda-qmmm string  ->  free energy profile (ASM)
+                                                  |
+                       senda-integration string -> PMF integration (WHAM/MBAR)
 ```
 
 On an HPC cluster, use `senda-slurm` to chain all jobs automatically.
@@ -59,6 +69,11 @@ On an HPC cluster, use `senda-slurm` to chain all jobs automatically.
 | `senda-sim` | Generate AMBER MD replica directories, submit jobs, check run status, or inspect topology |
 | `senda-slurm` | Generate a chained SLURM workflow script for the full pipeline |
 | `senda-analyse` | Analyse reactive distances from NVT trajectories and select a representative frame for QM/MM |
+| `senda-qmmm equil` | Stage 05: set up and optionally submit the QM/MM equilibration job |
+| `senda-qmmm prod` | Stage 05_QMMM_restraint_free: optional unrestrained QM/MM production run after equilibration |
+| `senda-qmmm scan` | Stage 06: set up the restrained scan along the initial guess path |
+| `senda-qmmm string` | Stage 07: set up the adaptive string method (ASM) calculation |
+| `senda-integration string` | Integrate stage 07's sampling output into a PMF (WHAM/MBAR, chunked SE, plot) |
 
 ---
 
@@ -118,19 +133,34 @@ ligands_libraries/
 
 Converts raw crystallographic PDB files into curated protein-ligand dimer PDBs ready for AMBER MD.
 
+### Config blocks read
+
+`senda-complex` reads three blocks from `config.yaml`:
+
+| Block | Role |
+|---|---|
+| `michaelis_complex:` | All structural settings (required) |
+| `inhibitors:` | Top-level list used to filter which inhibitors are written (optional — all if absent) |
+| `mutants:` | Top-level list used to filter which structures are processed (optional — all if absent) |
+
+Everything else in the config (`amber_simulator:`, `analysis:`, `qmmm:`, etc.) is ignored.
+
 ### What it does
 
-For each structure listed in `michaelis_complex.structures`:
+For each structure in `michaelis_complex.structures` whose mutant name appears in the top-level `mutants:` list (or all structures if `mutants:` is absent or empty):
 
 1. **Clean** -- strips CONECT/END records and unwanted HETATM residues; keeps only the specified chains; applies `residue_renames`; copies protonation states (HID/HIE/HIP, CYM, ASH, GLH, etc.) from the reference enzyme PDB, skipping any positions that are mutated.
 2. **Align** -- superimposes the cleaned structure onto the alignment reference by Ca RMSD (Kabsch). ANISOU records are carried through.
-3. **Write output PDBs** -- one per inhibitor listed in `inhibitor_sources`, plus an APO (protein-only) file:
+3. **Fill missing residues** -- residues present in the alignment reference but absent in the raw PDB are copied from the reference (valid because the structure has already been superimposed).
+4. **Write output PDBs** -- one per inhibitor listed in `inhibitor_sources`, plus an APO (protein-only) file:
    - `{mutant}_{inhibitor}_dimer.pdb` -- protein + ligand
    - `{mutant}_APO_dimer.pdb` -- protein only
 
 Ligand coordinates come from either the raw PDB itself (`native`) or a reference PDB you supply.
 
 ### Inputs
+
+The alignment reference PDB must already exist before running `senda-complex`. Typically this is a manually curated WT + ligand structure that serves as the common coordinate frame for all other structures.
 
 ```
 your_project/
@@ -139,7 +169,7 @@ your_project/
 |   +-- wildtype.pdb
 |   +-- mutant1.pdb
 +-- protein/
-    +-- WT_LER_dimer.pdb      # alignment reference (must exist)
+    +-- WT_LER_dimer.pdb      # alignment reference -- must exist beforehand
     +-- WT_NIR_dimer.pdb      # NIR coordinate source (if NIR is not native)
 ```
 
@@ -262,7 +292,7 @@ Two types of restraints are supported, both optional:
 
 **Positional restraints** -- backbone atoms held during heating and NPT equilibration. The mask, heating weight, and per-cycle schedule are configurable.
 
-**NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Must be a dict keyed by inhibitor name; each inhibitor's restraints are applied only to that inhibitor's topology. Omit an inhibitor's key (or set it to `[]`) for no NMR restraints for that ligand.
+**NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Must be a dict keyed by inhibitor name; each inhibitor's restraints are applied only to that inhibitor's topology. Omit an inhibitor's key (or set it to `[]`) for no NMR restraints for that inhibitor. Not limited to ligand atoms -- a resname can be protein, ligand, or anything else in the topology, so this works for APO systems too.
 
 ---
 
@@ -392,7 +422,7 @@ The penalty is added to the distance-deviation score (lower = better), so a valu
 To leave specific water molecules out of every `water_rdf` calculation for an inhibitor -- e.g. a conserved water buried in a non-reactive cavity that would otherwise dominate the nearest-water statistics -- two options, alongside `reactive_distances`/`water_rdf`:
 
 - `exclude_water: [N, ...]` -- literal 1-based AMBER residue number(s). A water's residue number isn't stable across mutants (each topology is solvated independently), so a number found for one system usually isn't the right one to exclude in another.
-- `exclude_water_neighbor: <ref_spec>` (recommended) -- resolved dynamically instead: senda finds the WAT residue nearest this reference (frame 0 of replica_1's first NVT trajectory) and excludes it, fresh every run. `<ref_spec>` may be a single atom or a list of them (nearest = minimum distance to any of them):
+- `exclude_water_neighbor: <ref_spec>` (recommended) -- resolved dynamically instead, the same mechanism as `qmwater_exclude_neighbor` in the QM/MM config: senda finds the WAT residue nearest this reference (frame 0 of replica_1's first NVT trajectory) and excludes it, fresh every run. `<ref_spec>` may be a single atom or a list of them (nearest = minimum distance to any of them):
 
 ```yaml
 analysis:
@@ -412,6 +442,186 @@ Both can be combined; the two exclusion sets are unioned.
 ```bash
 pip install -e ".[analysis]"   # installs scipy, matplotlib, pytraj
 ```
+
+---
+
+## QM/MM string method -- `senda-qmmm`
+
+Drives the QM/MM adaptive string method (ASM) workflow using AMBER's `sander.MPI`. Each stage is independently callable so individual steps can be re-run without restarting the full pipeline.
+
+### Prerequisites
+
+```bash
+pip install senda[qmmm]   # installs parmed, pytraj
+```
+
+AMBER with `sander.MPI` and `cpptraj` must be in `$PATH` (or loaded via a module on the cluster).
+
+### Stages
+
+| Subcommand | Stage | What it does |
+|---|---|---|
+| `senda-qmmm equil` | 05 | Resolves CV atoms and QM region, builds H10 topology, writes AMBER input + SLURM script for QM/MM equilibration |
+| `senda-qmmm prod` | 05_QMMM_restraint_free | **Optional.** Writes AMBER input + SLURM script for an unrestrained QM/MM production run starting from the equil output. If run, the scan stage uses its restart file as the starting structure. |
+| `senda-qmmm scan` | 06 | Writes per-node harmonic restraint files from the interpolated guess, AMBER input template, scan SLURM script, and cpptraj centering script |
+| `senda-qmmm string` | 07 | Writes CVs file, string guess, per-node input files (`in.sh`), groupfile, and SLURM script for `sander.MPI -ng N -groupfile` |
+
+### Run
+
+```bash
+# Write all input files (no job submission)
+senda-qmmm --config config.yaml equil
+senda-qmmm --config config.yaml prod    # optional: restraint-free production
+senda-qmmm --config config.yaml scan
+senda-qmmm --config config.yaml string
+
+# Write and submit to SLURM
+senda-qmmm --config config.yaml equil  -s
+senda-qmmm --config config.yaml prod   -s --after <equil_jobid>   # optional
+senda-qmmm --config config.yaml scan   -s --after <equil_or_prod_jobid>
+senda-qmmm --config config.yaml string -s --after <scan_jobid>
+
+# Process only one inhibitor / mutant
+senda-qmmm --config config.yaml equil -i LER -m WT
+```
+
+`--config` is required and must come before the subcommand, same as `senda-sim --config config.yaml <command>`.
+
+Without `-i`/`-m`: processes every inhibitor under `qmmm.string.inhibitors` that's also present in the top-level `inhibitors:` list (or all of them if that list is empty), and every mutant from the per-inhibitor or top-level `mutants:` list. `-i`/`-m` each explicitly select one inhibitor/mutant, bypassing those filters entirely -- even for a pair not listed anywhere else in the config.
+
+### Outputs
+
+All output lives alongside the replica directories for each inhibitor/mutant combination:
+
+```
+simulations/{inhibitor}/{mutant}/
++-- structure_H10.parm7           # topology with QM hydrogen masses set to 10 amu
++-- _guess_interpolated.npy       # arc-length-interpolated guess (internal cache)
++-- _qmmm_string_meta.json        # resolved metadata shared across stages
++-- 05_QMMM_equilibration/
+|   +-- in                        # AMBER QM/MM input
+|   +-- restr                     # equil.extra_restraints + optional CV restraints (AMBER &rst blocks)
+|   +-- equilibration.sh          # SLURM script
++-- 05_QMMM_restraint_free/       # only present if senda-qmmm prod was run
+|   +-- in                        # AMBER QM/MM input (no restraints, irest=1)
+|   +-- prod.sh                   # SLURM script
++-- 06_QMMM_scan/
+|   +-- in_template               # AMBER input with __NODE__ placeholder
+|   +-- restr0                    # scan.extra_restraints, appended per node by scan job
+|   +-- restr{1..N}               # per-node CV harmonic restraints
+|   +-- scan.sh                   # SLURM script (sequential node loop)
+|   +-- center.sh                 # cpptraj centering for one node; called by scan.sh on node 0 before the loop, then after every node -- each node starts from the previous node's centered structure
++-- 07_QMMM_string/
+    +-- in                        # AMBER string input (@NODE_SEED@ filled by in.sh)
+    +-- in.sh                     # generates per-node {i}.in files + string.groupfile
+    +-- guess                     # string guess with AMBER header (N_nodes  N_cvs  0.0)
+    +-- CVs                       # AMBER CVs file for sander ASM
+    +-- restr0                    # extra_restraints, same restraints applied to every node (AMBER &rst blocks)
+    +-- string.sh                 # SLURM script (sander.MPI -ng N -groupfile)
+```
+
+### Collective variable atom specs
+
+CV atoms use the same residue-by-name syntax as `senda-analyse`, plus an additional spec for catalytic water molecules:
+
+| Spec | When to use |
+|---|---|
+| `{sequence: N, name: atomname}` | Protein residue by PDB residue number |
+| `{substrate_sequence: N, name: atomname}` | Ligand/substrate by AMBER resid in chain A |
+| `{nearest_water_to: <ref_spec>, name: atomname}` | WAT molecule whose O is closest to `ref_spec` in the representative frame |
+
+CV types supported: `distance`, `angle`, `dihedral` (map to AMBER `BOND`, `ANGLE`, `TORSION`).
+
+### QM region
+
+If `qmmask` is not set, senda selects the QM region automatically:
+
+1. Seed: all residues containing a CV atom.
+2. Expand via bond-graph (parmed) until every QM/MM boundary bond is a C-C bond.
+3. Protein backbone C-N peptide bonds are handled specially to ensure a valid cut.
+4. Net charge is estimated by summing parmed partial charges of QM atoms.
+
+Override by setting `qmmask` and `qmcharge` explicitly in the inhibitor config block.
+
+If a manually-set `qmmask` needs to include a catalytic water whose residue number isn't stable across mutants or re-selected representative frames (e.g. `senda-analyse` may pick a different frame each run), write `:__NEAREST_WATER__` as its residue selector. The placeholder is resolved fresh every run to a WAT residue found the same way a CV's `nearest_water_to` is, so it always points at the correct water even though its residue number changes.
+
+`qmwater_neighbor: <ref_spec>` is optional: if every CV that uses `nearest_water_to` agrees on the same ref spec, that's used automatically -- this guarantees the QM region gets the *same* water the CVs (and the H10 mass patch) actually use, instead of a hand-declared field that can silently drift out of sync with the CVs and end up embedding a different water in the QM region than the one driving the reaction coordinate. If the CVs reference more than one distinct water, or none at all, `qmwater_neighbor` must be set explicitly; if set, it must match one of the CVs' `nearest_water_to` refs (when any exist), or senda raises an error rather than silently using the mismatched water.
+
+To keep a specific water out of that search -- e.g. a conserved water buried in a non-reactive cavity that happens to be geometrically nearest -- two options, in the same inhibitor block as `qmwater_neighbor`/`qmmask`. These are applied to every `nearest_water_to` search for this inhibitor, not just the QM region's: CVs and `extra_restraints` honor the same exclusion set, so they can never disagree with the QM region about which water(s) to avoid.
+
+- `qmwater_exclude: [N, ...]` -- literal 1-based AMBER residue number(s) to skip. Simple, but a water's residue number isn't stable across mutants/inhibitors (different topologies solvate independently), so a fixed number found for one system usually won't be the right one to exclude in another.
+- `qmwater_exclude_neighbor: <ref_spec>` (recommended) -- resolved dynamically the same way `qmwater_neighbor` is: senda finds the WAT residue nearest to this reference and excludes *that* from the main search, fresh every run. `<ref_spec>` may be a single atom (`{sequence: N, name: X}`) or a list of them, in which case "nearest" is by minimum distance to any of them -- useful for anchoring on a pocket defined by several residues rather than one atom:
+
+```yaml
+qmmm:
+  string:
+    inhibitors:
+      NIR:
+        qmwater_neighbor: {substrate_sequence: 614, name: NC}
+        qmwater_exclude_neighbor:
+          - {sequence: 41,  name: CA}
+          - {sequence: 164, name: CA}
+          - {sequence: 187, name: CA}
+```
+
+Both can be combined; the two exclusion sets are unioned.
+
+### Equilibration CV restraints
+
+By default stage 05 runs unrestrained. Set `equil.restrain_cvs: true` (and optionally `equil.force_constant`, default `20.0`) to add a soft harmonic restraint on each CV, targeting the first row of the (interpolated) guess file -- the reactant-state geometry -- keeping equilibration close to the reaction path. Restraints are written to `restr` and combined with any `equil.extra_restraints`; `nmropt`/`DISANG` are only added to the AMBER input when there's actually something to restrain.
+
+### H10 topology
+
+Hydrogen atoms in the CV definitions have their mass set to 10 amu in a modified topology (`structure_H10.parm7`). This improves sampling of light-atom CVs in the ASM. For WAT residues both hydrogens are patched even if only one appears in a CV.
+
+---
+
+## PMF integration -- `senda-integration`
+
+Integrates stage 07's (adaptive string method) sampling output into a potential of mean force (PMF): converts `07_QMMM_string/results/*_final.dat` to WHAM/MBAR/vFEP input, runs MBAR, splits the data into consecutive chunks to estimate the standard error, and plots the resulting PMF.
+
+### Prerequisites
+
+The external `ndfes`/`ndfes-PrintFES.py` tools must be in `$PATH`. Plotting requires matplotlib (`pip install -e ".[analysis]"`).
+
+### Run
+
+```bash
+senda-integration --config config.yaml string
+senda-integration --config config.yaml string -i NIR -m WT   # one inhibitor/mutant
+```
+
+Same inhibitor/mutant selection rules as `senda-qmmm`'s subcommands (see above).
+
+### Outputs
+
+All written inside the existing `simulations/{inhibitor}/{mutant}/07_QMMM_string/results/` directory:
+
+```
+results/
++-- wham/                  # WHAM-format per-window data + meta
++-- mbar/                  # ndfes-format meta, per-chunk MBAR runs, and:
+|   +-- mbar_PMF_<n_chunks>.PMF   # averaged PMF: rc, fe, se, weight, n_chunks
+|   +-- mbar_PMF_<n_chunks>.png   # PMF plot (mean +/- SE band)
++-- vfep/                  # same meta format as mbar/
+```
+
+The PMF is re-referenced to zero at the first free-energy minimum on the reactant (low-RC) side, so every chunk agrees exactly there and the standard error grows away from that anchor.
+
+### Configuration
+
+```yaml
+qmmm:
+  string:
+    integration:        # shared default for all inhibitors
+      n_chunks: 10       # number of consecutive-data chunks for the SE estimate
+    inhibitors:
+      NIR:
+        integration:     # optional per-inhibitor override (merged with the shared block)
+          n_chunks: 20
+```
+
+The temperature is not a separate setting -- it's read from the same `string.temp` (falling back to `equil.temp`, default `300.0`) the string simulation itself used, so it can never drift out of sync with the actual run.
 
 ---
 
@@ -531,7 +741,12 @@ amber_simulator:
     # inhibitor's topology. Omit the key or set it to [] for no restraints.
     # atoms: list of {residue: <resname>, name: <atomname>}
     # 2 atoms = distance, 3 = angle, 4 = dihedral
-    # Add index: <n> (0-based) for cross-residue atoms with multiple matches.
+    # If {residue, name} matches more than one residue instance (e.g. two
+    # copies of the same ligand in a dimer), disambiguate with chain: <letter>
+    # -- matches the PDB chain column of the dimer PDB fed to tleap (e.g.
+    # chain: B). Falls back to index: <n> (0-based occurrence position in
+    # topology order) for the rare case of multiple same-resname copies
+    # within the same chain.
     nmr:
       LER:
         - type: dihedral
@@ -592,25 +807,190 @@ analysis:
 
 # ---- SLURM -------------------------------------------------------------------
 slurm:
-  amber_module: apps/amber/24
+  # amber_module and env_setup are separate settings for two different
+  # job families -- often the same command, but not coupled, since a
+  # cluster could need a different module/version for either one.
+
+  # Full shell command that makes pmemd.cuda available in the classical MD
+  # SLURM scripts (run_gpu, NVT chunks) -- not a bare module name. Whatever
+  # this cluster needs: "module load X", "source /path/to/amber.sh", or
+  # both chained with &&.
+  amber_module: "module load apps/amber/24"
   account: MY_ACCOUNT
 
+  # Whatever this cluster needs before sander.MPI runs in the QM/MM SLURM
+  # scripts (equil/prod/scan/string) -- inserted verbatim in place of the
+  # entire preamble (hostname/srun numactl -s/module loads/exports), not
+  # appended to a default. If omitted, a sensible default is used
+  # (hostname, srun numactl -s, and the SRUN_CPUS_PER_TASK export) --
+  # setting env_setup replaces that default entirely, so include those
+  # lines yourself too if you still want them. Use YAML's | block scalar
+  # for multiple lines:
+  env_setup: |
+    hostname
+    srun numactl -s
+    module load PrgEnv-gnu/8.5.0
+    source ~/.local/amber.sh
+
+    export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
+
   # Command to activate the Python environment where senda is installed.
+  # Only used by senda-complex/senda-launch -- the QM/MM SLURM scripts run
+  # sander.MPI directly and don't need Python, so this isn't inserted there.
   # Examples: "conda activate senda" | "module load python/3.11"
   senda_env: ""
 
-  cpu:            # param, complex, and launcher jobs
-    partition: cpu
-    ntasks: 1
-    cpus-per-task: 4
-    mem: "8G"
-    time: "4:00:00"
+  cpu:            # param, complex, launcher jobs, AND all senda-qmmm stages
+    partition: cpu           # optional; omit to leave unset
+    qos: normal               # optional; omit to leave unset
+    cpus-per-task: 4          # only used by param/complex/launcher jobs
+    mem: "8G"                 # optional; if set, applies to every cpu job including senda-qmmm
+    time: "4:00:00"           # default wall time (param/complex/launcher, and equil/scan/prod)
+    time_string: "7-00:00:00" # override: wall time specifically for the string method job (07)
 
   gpu:            # run_gpu (stages 00-03) and NVT production chunks
     partition: gpu
     ntasks: 1
     gres: gpu:1
     time: "5-00:00:00"
+
+  qmmm:           # senda-qmmm ntasks only (equil/scan/prod share it; string scales automatically)
+    ntasks: 8       # MPI tasks for equil/scan/prod, and tasks-per-node for string
+```
+
+### Running on multiple clusters -- `slurm.profiles`
+
+If you move the same project between machines (e.g. a GPU cluster for classical MD, an HPC cluster for QM/MM), don't hand-edit `account`/`env_setup`/`cpu`/etc. back and forth or comment/uncomment blocks -- that's fragile. Instead, wrap the whole `slurm:` block per machine under `profiles`, and pick the active one with a single key:
+
+```yaml
+slurm:
+  active_profile: marenostrum   # switch clusters by changing only this line
+
+  profiles:
+    bluepebble:
+      amber_module: "module load apps/amber/24"
+      account: CHEM031804
+      gpu:
+        partition: gpu
+        ntasks: 1
+        gres: gpu:1
+        time: "5-00:00:00"
+
+    marenostrum:
+      account: uv36
+      env_setup: |
+        module purge
+        module load compenv-gpp/intel2023-ompi
+        module load amber/24-ompi
+      cpu:
+        qos: gp_resa
+        time: "1-00:00:00"
+      qmmm:
+        ntasks: 8
+```
+
+Each profile is a complete, independent `slurm:` block -- nothing is merged or inherited between profiles, so include everything that machine's jobs need (a profile that never runs classical MD can simply omit `gpu:`/`amber_module`, for example). Configs that don't use `slurm.profiles` at all keep working exactly as before -- this is opt-in.
+
+```yaml
+# ---- QM/MM string method -----------------------------------------------------
+qmmm:
+  string:
+    # Shared defaults for all inhibitors below. Omit an inhibitor's own
+    # equil/scan/string block entirely to inherit these; define one on the
+    # inhibitor to override just the keys it declares -- any key it omits
+    # still falls back to the shared value here (per-key merge, like
+    # {**shared, **inhibitor}). So an inhibitor can add e.g. just
+    # extra_restraints under string: without repeating n_nodes/nstlim/etc.
+    # qmcut is a single value, not a block, so there's nothing to merge:
+    # set it here once for every inhibitor, or override it on a specific
+    # inhibitor if it genuinely needs a different cutoff.
+    qmcut: 12.0           # QM electrostatic cutoff in Angstroms
+
+    equil:              # stage 05 -- QM/MM equilibration
+      temp: 300.0
+      nstlim: 20000
+      dt: 0.001
+      gamma_ln: 5.0
+      ntpr: 50
+      ntwx: 100
+      ntwr: 100
+
+    scan:               # stage 06 -- restrained scan
+      n_nodes: 64             # number of windows; must equal string.n_nodes
+      force_constant: 100.0   # harmonic force constant (kcal/mol/A^2 or /rad^2)
+      nstlim: 5000
+      dt: 0.001
+      gamma_ln: 5.0
+
+    string:             # stage 07 -- adaptive string method
+      n_nodes: 64
+      nstlim: 50000
+      dt: 0.001
+      gamma_ln: 5.0
+      seed: 1234              # base random seed; each node gets seed + node_index
+      prep_steps: 500         # ASM preparation steps before string update
+      z_bias: false           # Fortran logical (.false. / .true.)
+      force_constant_d: 100.0 # string force constant
+
+    integration:        # senda-integration string -- PMF from stage 07's sampling
+      n_chunks: 10             # consecutive-data chunks for the SE estimate
+
+    inhibitors:
+      LER:
+        mutants: [WT, E166V]   # subset of top-level mutants to run; omit key for all
+
+        collective_variables:
+          - type: distance        # distance | angle | dihedral
+            atoms:
+              - {sequence: 41, name: NE2}              # HIS41 NE2 (protein)
+              - {substrate_sequence: 301, name: C1}    # substrate C1 (ligand)
+          - type: distance
+            atoms:
+              - {sequence: 145, name: SG}              # CYS145 SG (protein)
+              - {nearest_water_to: {sequence: 41, name: NE2}, name: O}  # catalytic water O
+
+        guess: guesses/LER_path.dat   # initial path; interpolated to n_nodes automatically
+
+        qm_theory: DFTB3   # semiempirical level (DFTB3 | PM6 | AM1 | etc.)
+        # qmcut omitted -- inherits the shared value defined above under qmmm.string
+
+        # Optional: override automatic QM region selection.
+        # If set, qmcharge must also be provided.
+        # qmmask: "@1-50,301-310"
+        # qmcharge: -1
+
+        # Optional: extra fixed restraints (AMBER &rst blocks) for one
+        # specific stage. Nest under that stage's own equil:/scan:/string:
+        # block -- each stage's extra_restraints is independent, not shared
+        # with the others. Declaring a stage block here only overrides the
+        # keys you set; anything else (n_nodes, nstlim, ...) still falls
+        # back to the shared block above, so you can add just
+        # extra_restraints without repeating the rest. Each entry in
+        # 'atoms' is either a raw 1-based AMBER atom index, or the same
+        # {sequence: ...}/{substrate_sequence: ...}/{nearest_water_to: ...}
+        # spec used for CV atoms -- resolved once during equil (the only
+        # stage with full topology access) and cached for scan/string:
+        # equil:
+        #   extra_restraints:
+        #     - atoms: [{sequence: 41, name: NE2}, 12]
+        #       r1: 1.0
+        #       r2: 2.0
+        #       r3: 2.5
+        #       r4: 4.0
+        #       rk2: 50.0
+        #       rk3: 50.0
+
+        prod:               # stage 05_QMMM_restraint_free -- optional unrestrained production
+          nstlim: 100000    # run length (default 100000 steps = 100 ps at dt=0.001)
+          dt: 0.001
+          gamma_ln: 1.0     # lower friction than equil; typical for production
+          ntpr: 500
+          ntwx: 500
+          ntwr: 500
+          # temp: 300.0     # inherits from equil.temp if omitted
+
+        # equil/scan/string omitted -- inherits the shared blocks defined
+        # above under qmmm.string (temp, nstlim, n_nodes, etc.)
 ```
 
 ---

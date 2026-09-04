@@ -486,9 +486,8 @@ def _analyse_chain(
     # holds 1-based AMBER residue numbers to leave out (e.g. a conserved
     # water buried in a non-reactive cavity that would otherwise dominate
     # the nearest-water statistics). exclude_water_neighbor resolves the
-    # water to exclude dynamically instead of relying on a fixed residue
-    # number, which isn't stable across mutants (each topology is solvated
-    # independently).
+    # water to exclude dynamically (same search as qmwater_exclude_neighbor
+    # in the QM/MM config) instead of relying on a fixed residue number.
     excluded_resid = {n - 1 for n in (exclude_water or [])}
     if exclude_water_neighbor:
         excluded_resid.add(_find_nearest_water_resid(
@@ -657,6 +656,7 @@ def _analyse_chain(
         str(sim_base / f"replica_{best_rep}" / "04_NVT" / "structure_NVT_*.nc")
     ))
     traj_sel  = pt.load(nc_files_sel, top=str(top_path))
+    pt.autoimage(traj_sel)
     rst7_path = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"
     pt.write_traj(str(rst7_path), traj_sel[best_loc - 1:best_loc], format="rst7", overwrite=True)
     # pytraj appends .1 for rst7 format; rename to the plain .rst7 path
