@@ -11,6 +11,7 @@ Operations (in order):
      that chain is retained.
   5. Apply residue_renames (e.g. "216" → "LER").
   6. Apply protonation states from a reference structure map.
+  7. Rename confirmed disulfide-bonded cysteines to CYX.
 """
 
 from __future__ import annotations
@@ -150,6 +151,7 @@ def clean(
     residue_renames: list[tuple[str, str]] | None = None,
     chains:          frozenset[str] = frozenset(("A", "B")),
     strip_resnames:  set[str] | None = None,
+    disulfides:      list[tuple[str, int, str, int]] | None = None,
 ) -> list[str]:
     """
     Return cleaned PDB lines from a raw crystal structure.
@@ -163,10 +165,17 @@ def clean(
     residue_renames : [(from_name, to_name), …] applied before protonation rename
     chains          : chain IDs to retain for ATOM/HETATM records
     strip_resnames  : HETATM residue names to always discard; defaults to {"GOL"}
+    disulfides      : [(chain1, resnum1, chain2, resnum2), …] confirmed disulfide
+                      pairs; both residues are renamed to CYX, overriding any
+                      other resname (including one supplied by prot_map)
     """
     _renames: dict[str, str] = dict(residue_renames or [])
     _strip:   set[str]       = strip_resnames if strip_resnames is not None else {"GOL"}
     _water_keep = _water_keep_set(lines, chains, _strip)
+    _cyx_keys: set[tuple[str, int]] = set()
+    for c1, r1, c2, r2 in (disulfides or []):
+        _cyx_keys.add((c1, r1))
+        _cyx_keys.add((c2, r2))
 
     out: list[str] = []
 
@@ -209,6 +218,13 @@ def clean(
                             line    = _rename_res(line, ref_name)
                             resname = ref_name
 
+            # Step 7: apply confirmed disulfide renames
+            if _cyx_keys:
+                rn = _resnum(line)
+                if rn is not None and (ch, rn) in _cyx_keys and resname != "CYX":
+                    line    = _rename_res(line, "CYX")
+                    resname = "CYX"
+
             out.append(line)
             continue
 
@@ -237,6 +253,11 @@ def clean(
                         group = _GROUP_OF.get(resname)
                         if group is not None and ref_name in group:
                             line    = _rename_res(line, ref_name)
+
+            if _cyx_keys:
+                rn = _resnum(line)
+                if rn is not None and (ch, rn) in _cyx_keys and resname != "CYX":
+                    line = _rename_res(line, "CYX")
 
             out.append(line)
             continue

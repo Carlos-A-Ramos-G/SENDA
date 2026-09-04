@@ -5,14 +5,30 @@ CLI entry point for senda-complex.
 Usage:
     senda-complex --config config.yaml
     senda-complex --config config.yaml --force
+    senda-complex --config config.yaml --report-disulfides
 """
 
 import argparse
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _validate_disulfides(disulfides: list[tuple[str, int, str, int]]) -> None:
+    """Hard-stop if any (chain, resnum) endpoint appears in more than one pair."""
+    counts = Counter()
+    for c1, r1, c2, r2 in disulfides:
+        counts[(c1, r1)] += 1
+        counts[(c2, r2)] += 1
+    repeated = [key for key, n in counts.items() if n > 1]
+    if repeated:
+        sys.exit(
+            "Error: michaelis_complex.disulfides lists the same residue in more "
+            f"than one pair: {repeated} — a cysteine can only form one disulfide bond."
+        )
 
 
 def main() -> None:
@@ -32,6 +48,9 @@ def main() -> None:
                         help="Path to senda config.yaml")
     parser.add_argument("--force", action="store_true",
                         help="Re-run even if output files already exist")
+    parser.add_argument("--report-disulfides", action="store_true",
+                        help="Detect candidate Cys SG-SG disulfide pairs per raw "
+                             "structure and exit (no output files written)")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -80,10 +99,55 @@ def main() -> None:
 
     chains = frozenset(str(c) for c in mc.get("chains", ["A", "B"]))
 
+    if args.report_disulfides:
+        from .disulfides import find_disulfide_candidates
+
+        all_candidates: list[dict] = []
+        for filename, mutant in structures.items():
+            raw_pdb = raw_pdbs_dir / filename
+            if not raw_pdb.exists():
+                sys.exit(f"Error: not found: {raw_pdb}")
+            lines = raw_pdb.read_text().splitlines(keepends=True)
+            candidates = find_disulfide_candidates(lines, chains)
+
+            print(f"[{mutant}] {filename}")
+            if not candidates:
+                print("  (no candidates within 3.0 A)")
+            else:
+                print(f"  {'Chain1':<7}{'Res1':<6}{'Chain2':<7}{'Res2':<6}{'Distance':<10}Band")
+                for c in candidates:
+                    flag = "  <- verify manually" if c["band"] == "borderline" else ""
+                    print(f"  {c['chain1']:<7}{c['resnum1']:<6}{c['chain2']:<7}"
+                          f"{c['resnum2']:<6}{c['distance']:<9.2f} A {c['band']}{flag}")
+                all_candidates.extend(c for c in candidates if c["band"] == "bonded")
+            print()
+
+        if all_candidates:
+            seen = set()
+            print("Add confirmed pairs to michaelis_complex.disulfides in config.yaml:")
+            print("  michaelis_complex:")
+            print("    disulfides:")
+            for c in all_candidates:
+                key = (c["chain1"], c["resnum1"], c["chain2"], c["resnum2"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                print(f"      - chain1: {c['chain1']}")
+                print(f"        resnum1: {c['resnum1']}")
+                print(f"        chain2: {c['chain2']}")
+                print(f"        resnum2: {c['resnum2']}")
+        sys.exit(0)
+
     residue_renames = [
         (str(r["from"]), str(r["to"]))
         for r in mc.get("residue_renames", [])
     ]
+
+    disulfides = [
+        (str(d["chain1"]), int(d["resnum1"]), str(d["chain2"]), int(d["resnum2"]))
+        for d in mc.get("disulfides", [])
+    ]
+    _validate_disulfides(disulfides)
 
     # inhibitor_sources: {name: "native"} or {name: path_relative_to_cwd}
     raw_sources = mc.get("inhibitor_sources", {})
@@ -123,6 +187,7 @@ def main() -> None:
     print(f"Reference enzyme  : {reference_enzyme_pdb}")
     print(f"Chains            : {sorted(chains)}")
     print(f"Residue renames   : {residue_renames or '(none)'}")
+    print(f"Disulfides        : {disulfides or '(none)'}")
     print(f"Inhibitor sources : {inhibitor_sources}")
     print(f"Structures        : {len(structures)}")
     print()
@@ -141,6 +206,7 @@ def main() -> None:
             residue_renames=residue_renames,
             force=args.force,
             include_apo=include_apo,
+            disulfides=disulfides,
         )
     except FileNotFoundError as exc:
         sys.exit(f"Error: {exc}")

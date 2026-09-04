@@ -39,6 +39,7 @@ from __future__ import annotations
 import math
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 from .templates import (
@@ -49,7 +50,11 @@ from .templates import (
     RUN_BODY, NVT_JOB_BODY,
     fill,
 )
+from senda.analysis.distances import _parse_pdb_residues
 from senda.config import sbatch_lines
+from senda.michaelis_complex.clean import _chain, _coords, _resname, _resnum
+
+_DISULFIDE_DISTANCE_LIMIT = 3.5  # Angstrom -- hard error above this
 
 _SUBDIRS = ("00_prep", "01_min", "02_heat", "03_equil", "04_NVT")
 
@@ -63,7 +68,7 @@ _DEFAULT_EQUIL_SCHEDULE     = [15.0, 12.0, 9.0, 6.0, 3.0]
 # ---------------------------------------------------------------------------
 
 def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
-                 split: bool = False) -> str:
+                 split: bool = False, disulfide_bonds: list[str] | None = None) -> str:
     """
     Build the tleap input file.
 
@@ -83,6 +88,10 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
 
     When split=True, the file is written as leap_structure_tmpl with NPOS/NNEG
     placeholders that the run script fills at job time after the SPLIT calculation.
+
+    disulfide_bonds -- pre-resolved 'bond structure.<i>.SG structure.<j>.SG'
+    lines (see _resolve_disulfide_bonds), inserted right after loadpdb so the
+    solute's covalent topology is fully defined before solvation/ionization.
     """
     default_ff = ["leaprc.protein.ff14SB", "leaprc.water.tip3p"]
     if has_ligand:
@@ -108,6 +117,7 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
             lines.append(f"loadamberparams {fname}")
 
     lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
+    lines.extend(disulfide_bonds or [])
 
     if split:
         lines.append(f"solvatebox structure {box_type} {box_size}")
@@ -182,6 +192,72 @@ def _get_nmr_list(sim: dict, inh: str, has_ligand: bool) -> list:
             "restraints to every inhibitor, which is almost certainly wrong."
         )
     return raw.get(inh) or []
+
+
+def _resolve_disulfide_bonds(disulfides: list[dict], pdb_path: Path) -> list[str]:
+    """
+    Return 'bond structure.<i>.SG structure.<j>.SG' lines for configured pairs.
+
+    <i>/<j> are 1-based positions in _parse_pdb_residues(pdb_path) order --
+    tleap assigns unit residue numbers sequentially in loadpdb file order, and
+    this dimer PDB has no residue coming before a Cys other than earlier
+    protein residues (ligand/water always come later).
+
+    Hard-stops if a configured residue isn't found, if the same residue is
+    used in more than one pair, or if the actual SG-SG distance in this PDB
+    exceeds _DISULFIDE_DISTANCE_LIMIT -- an incorrect bond silently builds a
+    topology with a covalent link between atoms that aren't adjacent.
+    """
+    if not disulfides:
+        return []
+
+    counts = Counter()
+    for d in disulfides:
+        counts[(d["chain1"], d["resnum1"])] += 1
+        counts[(d["chain2"], d["resnum2"])] += 1
+    repeated = [key for key, n in counts.items() if n > 1]
+    if repeated:
+        raise ValueError(
+            "amber_simulator disulfides lists the same residue in more than "
+            f"one pair: {repeated} -- a cysteine can only form one disulfide bond."
+        )
+
+    residues = _parse_pdb_residues(pdb_path)
+    index_of = {(ch, rn): i + 1 for i, (ch, rn, _) in enumerate(residues)}
+
+    sg_coords: dict[tuple[str, int], tuple[float, float, float]] = {}
+    for line in pdb_path.read_text().splitlines(keepends=True):
+        if not line.startswith("ATOM  "):
+            continue
+        if _resname(line) not in ("CYS", "CYX"):
+            continue
+        if line[12:16].strip() != "SG":
+            continue
+        if line[16] not in (" ", "A"):
+            continue
+        sg_coords.setdefault((_chain(line), _resnum(line)), _coords(line))
+
+    bond_lines = []
+    for d in disulfides:
+        key1 = (d["chain1"], d["resnum1"])
+        key2 = (d["chain2"], d["resnum2"])
+        for key in (key1, key2):
+            if key not in index_of:
+                raise ValueError(f"disulfide residue {key} not found in {pdb_path.name}")
+            if key not in sg_coords:
+                raise ValueError(f"no SG atom found for residue {key} in {pdb_path.name}")
+
+        dist = math.dist(sg_coords[key1], sg_coords[key2])
+        if dist > _DISULFIDE_DISTANCE_LIMIT:
+            raise ValueError(
+                f"disulfide pair {key1}-{key2} in {pdb_path.name} has SG-SG "
+                f"distance {dist:.2f} A (> {_DISULFIDE_DISTANCE_LIMIT} A) -- "
+                "check michaelis_complex.disulfides or the structure"
+            )
+
+        bond_lines.append(f"bond structure.{index_of[key1]}.SG structure.{index_of[key2]}.SG")
+
+    return bond_lines
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +476,7 @@ def setup_replica(
     ligands_lib_dir: Path,
     simulations_dir: Path,
     mode:            str = "cluster",
+    disulfides:      list[dict] | None = None,
 ) -> None:
     replica_dir = simulations_dir / inh / mut / f"replica_{rep}"
     for d in _SUBDIRS:
@@ -410,6 +487,8 @@ def setup_replica(
     if not src_pdb.exists():
         raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
     shutil.copy(src_pdb, replica_dir / "00_prep" / src_pdb.name)
+
+    disulfide_bonds = _resolve_disulfide_bonds(disulfides or [], src_pdb)
 
     # Ligand FF parameters (not needed for APO)
     has_ligand = (inh != "APO")
@@ -438,11 +517,13 @@ def setup_replica(
             _render_leap_count(inh, mut, has_ligand, leap_cfg)
         )
         (replica_dir / "00_prep" / "leap_structure_tmpl").write_text(
-            _render_leap(inh, mut, has_ligand, leap_cfg, split=True)
+            _render_leap(inh, mut, has_ligand, leap_cfg, split=True,
+                         disulfide_bonds=disulfide_bonds)
         )
     else:
         (replica_dir / "00_prep" / "leap_structure").write_text(
-            _render_leap(inh, mut, has_ligand, leap_cfg)
+            _render_leap(inh, mut, has_ligand, leap_cfg,
+                         disulfide_bonds=disulfide_bonds)
         )
 
     # HMR cpptraj script
@@ -489,6 +570,7 @@ def setup_all(
     simulations_dir: Path,
     mode:            str  = "cluster",
     force:           bool = False,
+    disulfides:      list[dict] | None = None,
 ) -> None:
     total = len(inhibitors) * len(mutants) * n_replicas
     print(f"\nMode: {mode}")
@@ -513,6 +595,7 @@ def setup_all(
                     inh, mut, rep, sim, slurm,
                     protein_dir, ligands_lib_dir, simulations_dir,
                     mode=mode,
+                    disulfides=disulfides,
                 )
 
     print("\nSetup complete.")
