@@ -12,11 +12,12 @@ inhibitors:
 #  - APO
 mutants:
   - WT
-#  - E166V
-#  - G143S
+  - E166V
+  - T21I_E166V
+  - L50F_E166V
+  - H172Y
+  - G143S
 #  - A173V
-#  - H172Y
-#  - L50F_E166V
 #  - M165T
 #  - M49I
 #  - M49I_M165I
@@ -25,7 +26,6 @@ mutants:
 #  - Q189K
 #  - Q192L
 #  - S144A
-#  - T21I_E166V
 replicas: 10
 
 # --- Ligand parameterization --------------------------------------------------
@@ -39,10 +39,10 @@ ligand_parameters:
 
   net_charge: auto   # auto = detect via RDKit, or set an explicit integer
   multiplicity: 1
-  atom_type: gaff2   # gaff2 | gaff | amber
+  atom_type: gaff   # gaff2 | gaff | amber
 
   forcefield:
-    ligand: leaprc.gaff2
+    ligand: leaprc.gaff
 
   # Gaussian settings -- only active when charge_method: resp
   gaussian_opt:
@@ -111,10 +111,10 @@ amber_simulator:
       LER:
         - type: dihedral
           atoms:
-            - {residue: LER, name: O5}
+            - {residue: LER, name: OP1}
             - {residue: LER, name: C7}
             - {residue: LER, name: C6}
-            - {residue: LER, name: N3}
+            - {residue: LER, name: NP1}
           r1: -10.0
           r2: -5.0
           r3: 15.0
@@ -142,19 +142,19 @@ michaelis_complex:
       to: LER
 
   # PDB used for Ca superposition and missing-residue filling.
-  alignment_reference: protein/WT_LER_dimer.pdb
+  alignment_reference: protein/refs/WT_LER_dimer.pdb
 
   # PDB from which protonation states (HID/HIE/HIP, CYM, ASH, GLH, ...) are read.
   # Can be a holo structure -- ligands and water are ignored automatically.
   # Defaults to alignment_reference if omitted.
-  reference_enzyme_pdb: protein/WT_LER_dimer.pdb
+  reference_enzyme_pdb: protein/refs/WT_LER_dimer.pdb
 
   # Where each inhibitor's coordinates come from:
   #   native               -> already in the raw PDB (after residue_renames)
   #   path/to/ref.pdb      -> copy coordinates from this reference PDB
   inhibitor_sources:
-    LER: native
-    NIR: protein/WT_NIR_dimer.pdb
+    LER: protein/refs/WT_LER_dimer.pdb
+    NIR: protein/refs/WT_NIR_dimer.pdb
 
   # Mapping: raw PDB filename -> mutant name used in output file names.
   # Output: {mutant}_LER_dimer.pdb, {mutant}_NIR_dimer.pdb, {mutant}_APO_dimer.pdb
@@ -202,6 +202,7 @@ analysis:
       - label: "water_HIS41_NE2"
         center_atoms:
           - {sequence: 41, name: NE2}
+          - {substrate_sequence: 613, name: OP1}
         r_max: 10.0      # Angstroms; default 10.0
         tolerance: 0.3   # peak +/- window for frame scoring; default 0.3
         penalty: 3.0     # score penalty when no water at first peak; default 3.0
@@ -210,7 +211,7 @@ analysis:
     reactive_distances:
       - label: "CYS145_SG-C19_NIR"
         atoms:
-          - {substrate_sequence: 613, name: C19}  # AMBER resid of NIR in chains[0] (check parm7)
+          - {substrate_sequence: 614, name: C19}  # AMBER resid of NIR in chains[0] (check parm7)
           - {sequence: 145, name: SG}
       - label: "CYS145_SG-NE2_HIS41"
         atoms:
@@ -220,6 +221,7 @@ analysis:
       - label: "water_HIS41_NE2"
         center_atoms:
           - {sequence: 41, name: NE2}
+          - {substrate_sequence: 614, name: NC}
         r_max: 10.0
         tolerance: 0.3
         penalty: 3.0
@@ -247,11 +249,17 @@ slurm:
         gres: gpu:1
         time: "5-00:00:00"
 
+      # Optional: shell command to activate the environment where senda is
+      # installed. Inserted into senda-complex and senda-launch scripts
+      # before any senda-* call.
+      # senda_env: "source /path/to/miniconda3/etc/profile.d/conda.sh && conda activate <env_name>"
+
       cpu:                     # param, complex, launcher jobs
         partition: xxxxx       # optional; omit to leave unset
         cpus-per-task: 4       # only used by param/complex/launcher jobs
         mem: "8G"              # optional; if set, applies to every cpu job including senda-qmmm
         time: "4:00:00"        # default wall time (param/complex/launcher, and equil/scan/prod)
+        # time_string: "3-00:00:00"  # override: wall time specifically for the string method job (07)
 
     HPC_2:   # CPU cluster: senda-qmmm string-method stages (equil/scan/string)
       account: XXXXXXXXXX
@@ -265,6 +273,8 @@ slurm:
       # default entirely, so include those lines yourself too if you
       # still want them.
       env_setup: |
+        ulimit -s unlimited
+
         module purge
         module load compiler-suite
         module load amber/24
@@ -276,11 +286,11 @@ slurm:
         time: "1-00:00:00"        # default wall time for equil/scan/prod
         # time_string: "3-00:00:00"  # override: wall time specifically for the string method job (07)
 
-      # qmmm.ntasks intentionally omitted here: senda-qmmm defaults to
-      # ntasks=8 for equil/scan and ntasks-per-node=2 for string, which
-      # already match a real completed run at n_nodes=64. Set qmmm.ntasks
-      # under a profile's cpu: block only if your cluster needs something
-      # different.
+      # Optional: override ntasks for senda-qmmm's equil/scan stages (string
+      # scales automatically instead). Defaults to ntasks=8 for equil/scan
+      # and ntasks-per-node=2 for string if omitted.
+      # qmmm:
+      #   ntasks: 8
 
 # --- QM/MM string method -----------------------------------------------------
 qmmm:
@@ -327,6 +337,38 @@ qmmm:
       force_constant_d: 100.0 # string force constant
 
     inhibitors:
+      LER:
+        mutants:   # subset of top-level mutants to run; omit key for all
+
+        collective_variables:
+          - type: distance
+            atoms:
+              - {sequence: 145, name: SG}               # CYS145 SG (protein)
+              - {sequence: 145, name: HG}               # CYS145 HG (protein)
+          - type: distance
+            atoms:
+              - {sequence: 145, name: HG}               # CYS145 HG (protein)
+              - {sequence: 41, name: NE2}               # HIS41  NE2(protein)
+          - type: distance
+            atoms:
+              - {sequence: 145, name: SG}               # CYS145 SG (protein)
+              - {substrate_sequence: 613, name: C7}     # LER C7 (AMBER resid from parm7)
+          - type: distance
+            atoms:
+              - {sequence: 145, name: HG}               # CYS145 SG (protein)
+              - {substrate_sequence: 613, name: OP1}    # LER OP1 (AMBER resid from parm7)
+
+        guess: guesses/LER_path.dat
+
+        qm_theory: DFTB3
+        # qmcut omitted -- inherits the shared value defined above under qmmm.string
+
+        # Optional: set both to override the auto-selected QM region at any stage.
+        # Run 'senda-qmmm string equil' first to check the auto-selection, then
+        # uncomment and fill these if the region needs adjustment.
+        qmmask: ":41,145&!@C,O | :40,144&@C,O | :613&@C1,C2,C3,C4,C5,C6,C7,C8,C9,C27,C28,C29,C30,C31,NP1,NPP,NSP1,OP1,OP2,OPP,OSP1,H,H1,H2,H3,H4,H5,H6,H7,H8,H33,H34,H35,H36,H37,H38,H39,H40,H41,H42,H43"
+        qmcharge: 0
+
       NIR:
         mutants:   # subset of top-level mutants to run; omit key for all
 
@@ -377,40 +419,92 @@ qmmm:
           - {sequence: 41,  name: HD1}
           - {sequence: 164, name: ND1}
 
-        # Optional: extra fixed restraints (AMBER &rst blocks) for one specific
-        # stage. Nest under that stage's own equil:/scan:/string: block -- each
-        # stage's extra_restraints is independent, not shared with the others.
-        # Atoms may be a raw 1-based AMBER index or a {sequence:...}/
-        # {substrate_sequence:...}/{nearest_water_to:...} spec, resolved the
-        # same way CV atoms are. NOT used in the completed WT production run
-        # below -- shown here purely as a worked example of the syntax, using
-        # this system's own atoms (a flat-bottom "floor" restraint keeping the
-        # reactive water's H1 from clashing with its partner atoms below 1.8 A;
-        # r3=r4=999/rk3=0 leaves no ceiling). Defined once under equil: with a
-        # YAML anchor and reused via alias under scan:/string: so one edit
-        # updates all three.
+        # Extra fixed restraints (AMBER &rst blocks). Each entry keeps H1 of
+        # the reactive water (the same water the CVs' nearest_water_to
+        # already resolves to, above) from getting closer than 1.8 A to one
+        # partner atom -- a flat-bottom "floor" restraint: r1=0/r2=1.8 ramps
+        # up the penalty below 1.8 A, and r3=r4=999/rk3=0 leaves no ceiling
+        # (arbitrarily far is free). One &rst block only takes a single atom
+        # pair, so 4 separate entries are needed for the 4 partner atoms.
         #
-        # equil:
-        #   extra_restraints: &water_h1_no_clash
-        #     - atoms:
-        #         - nearest_water_to:
-        #             - {sequence: 41, name: NE2}
-        #             - {substrate_sequence: 614, name: NC}
-        #           name: H1
-        #         - {sequence: 145, name: SG}
-        #       r1: 0.0
-        #       r2: 1.8
-        #       r3: 2.8
-        #       r4: 10.0
-        #       rk2: 50.0
-        #       rk3: 0.0
+        # Defined once here (under equil:) with a YAML anchor (&...) and
+        # reused via alias (*...) under scan:/string: below -- equil:/scan:/
+        # string: are independent (no restraint sharing by default), but an
+        # alias points all three at the literal same list, so one edit
+        # updates all of them.
         #
-        # scan:
-        #   extra_restraints: *water_h1_no_clash
-        #
-        # string:
-        #   extra_restraints: *water_h1_no_clash
+        # Declaring equil:/scan:/string: here only overrides the keys set
+        # below (extra_restraints) -- everything else (nstlim, restrain_cvs,
+        # n_nodes, seed, z_bias, ...) still falls back to the shared
+        # qmmm.string.equil/scan/string block above automatically.
+        equil:
+          extra_restraints: &water_h1_h2_no_clash
+            - atoms:
+                - nearest_water_to:
+                    - {sequence: 41, name: NE2}
+                    - {substrate_sequence: 614, name: NC}
+                  name: H1
+                - {sequence: 145, name: SG}
+              r1: 0.0
+              r2: 1.8
+              r3: 2.8
+              r4: 10.0
+              rk2: 50.0
+              rk3: 0.0
+            - atoms:
+                - nearest_water_to:
+                    - {sequence: 41, name: NE2}
+                    - {substrate_sequence: 614, name: NC}
+                  name: H1
+                - {substrate_sequence: 614, name: NP1}
+              r1: 0.0
+              r2: 1.8
+              r3: 2.8
+              r4: 10.0
+              rk2: 50.0
+              rk3: 0.0
+            - atoms:
+                - nearest_water_to:
+                    - {sequence: 41, name: NE2}
+                    - {substrate_sequence: 614, name: NC}
+                  name: H1
+                - {sequence: 41, name: NE2}
+              r1: 0.0
+              r2: 1.8
+              r3: 2.8
+              r4: 10.0
+              rk2: 50.0
+              rk3: 0.0
+            - atoms:
+                - nearest_water_to:
+                    - {sequence: 41, name: NE2}
+                    - {substrate_sequence: 614, name: NC}
+                  name: H1
+                - {substrate_sequence: 614, name: OP2}
+              r1: 0.0
+              r2: 1.8
+              r3: 2.8
+              r4: 10.0
+              rk2: 50.0
+              rk3: 0.0
+            - atoms:
+                - nearest_water_to:
+                    - {sequence: 41, name: NE2}
+                    - {substrate_sequence: 614, name: NC}
+                  name: H2
+                - nearest_water_to:
+                    - {sequence: 41, name: NE2}
+                    - {substrate_sequence: 614, name: NC}
+                  name: O
+              r1: 0.0
+              r2: 1.0
+              r3: 1.2
+              r4: 10.0
+              rk2: 0.0
+              rk3: 50.0
 
-        # equil/scan/string blocks omitted above (apart from the commented
-        # example) -- everything inherits the shared qmmm.string.equil/scan/
-        # string blocks defined earlier in this file.
+        scan:
+          extra_restraints: *water_h1_h2_no_clash
+
+        string:
+          extra_restraints: *water_h1_h2_no_clash
