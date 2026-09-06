@@ -483,11 +483,17 @@ senda-qmmm --config config.yaml string -s --after <scan_jobid>
 
 # Process only one inhibitor / mutant
 senda-qmmm --config config.yaml equil -i LER -m WT
+
+# Build the QM/MM system from a different monomer of the dimer
+senda-qmmm --config config.yaml equil -i LER -m WT -c B
+senda-qmmm --config config.yaml scan  -i LER -m WT -c B   # scan/string/prod need the same -c equil used
 ```
 
 `--config` is required and must come before the subcommand, same as `senda-sim --config config.yaml <command>`.
 
 Without `-i`/`-m`: processes every inhibitor under `qmmm.string.inhibitors` that's also present in the top-level `inhibitors:` list (or all of them if that list is empty), and every mutant from the per-inhibitor or top-level `mutants:` list. `-i`/`-m` each explicitly select one inhibitor/mutant, bypassing those filters entirely -- even for a pair not listed anywhere else in the config.
+
+Without `-c`: builds the QM/MM system from `michaelis_complex.chains[0]` (e.g. `"A"`), writing to the same paths every prior run used. `-c CHAIN` selects a different chain (e.g. `"B"`) to run the identical CV/restraint/QM-region config against that monomer instead -- its cached artifacts and stage directories are suffixed `_chain{CHAIN}` so they don't overwrite the default chain's output (see Outputs below). `scan`/`prod`/`string` must be given the same `-c` value `equil` was run with, since they read back that chain's cached metadata.
 
 ### Outputs
 
@@ -520,6 +526,8 @@ simulations/{inhibitor}/{mutant}/
     +-- string.sh                 # SLURM script (sander.MPI -ng N -groupfile)
 ```
 
+Every path above is for the default chain (`michaelis_complex.chains[0]`). Running with `-c CHAIN` for any other chain writes the same set of files/directories with a `_chain{CHAIN}` suffix instead (e.g. `structure_H10_chainB.parm7`, `_qmmm_string_meta_chainB.json`, `05_QMMM_equilibration_chainB/`, `07_QMMM_string_chainB/`), so both chains can be set up for the same inhibitor/mutant without collision.
+
 ### Collective variable atom specs
 
 CV atoms use the same residue-by-name syntax as `senda-analyse`, plus an additional spec for catalytic water molecules:
@@ -527,8 +535,10 @@ CV atoms use the same residue-by-name syntax as `senda-analyse`, plus an additio
 | Spec | When to use |
 |---|---|
 | `{sequence: N, name: atomname}` | Protein residue by PDB residue number |
-| `{substrate_sequence: N, name: atomname}` | Ligand/substrate by AMBER resid in chain A |
+| `{substrate_sequence: N, name: atomname}` | Ligand/substrate by AMBER resid declared in `chains[0]`; resolved to the corresponding copy in whichever chain `-c` selects (default `chains[0]` itself) by geometric proximity |
 | `{nearest_water_to: <ref_spec>, name: atomname}` | WAT molecule whose O is closest to `ref_spec` in the representative frame |
+
+The same `collective_variables`/`extra_restraints`/`qmmask` config works unchanged for any chain -- atom specs are resolved relative to whichever chain `-c` selects, so there's no need to duplicate an inhibitor's block per chain.
 
 CV types supported: `distance`, `angle`, `dihedral` (map to AMBER `BOND`, `ANGLE`, `TORSION`).
 
@@ -589,9 +599,10 @@ The external `ndfes`/`ndfes-PrintFES.py` tools must be in `$PATH`. Plotting requ
 ```bash
 senda-integration --config config.yaml string
 senda-integration --config config.yaml string -i NIR -m WT   # one inhibitor/mutant
+senda-integration --config config.yaml string -i NIR -m WT -c B   # a non-default chain
 ```
 
-Same inhibitor/mutant selection rules as `senda-qmmm`'s subcommands (see above).
+Same inhibitor/mutant selection rules as `senda-qmmm`'s subcommands (see above). `-c CHAIN` must match whatever chain `senda-qmmm string` was run with (default `chains[0]`) -- it selects which `_chain{CHAIN}`-suffixed `07_QMMM_string` results to integrate.
 
 ### Outputs
 
