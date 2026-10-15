@@ -57,8 +57,23 @@ ligand_parameters:
 
 # --- AMBER simulation ---------------------------------------------------------
 amber_simulator:
+  # MD engine for stages 01_min..04_NVT: amber (pmemd.cuda, default) or openmm.
+  # 00_prep (tleap, HMR, restraints) is identical for both.
+  engine: amber
   use_hmr: true
   temperature: 300.0  # K
+
+  # OpenMM-only settings (ignored with engine: amber). All optional.
+  openmm:
+    platform: CUDA               # CUDA | OpenCL | CPU | Reference
+    precision: mixed             # CUDA/OpenCL only (pmemd.cuda uses mixed precision too)
+    command: senda-omm           # or "/path/to/env/bin/python -m senda.simulation.openmm_engine"
+    # env_setup: "conda activate openmm"  # local mode: extra line after amber_home setup
+    cut: 10.0                    # A, MD stages (min uses min.cut)
+    ewald_error_tolerance: 5.0e-4
+    barostat_interval: 100       # steps between MC volume moves (AMBER mcbarint)
+    heat_update_interval: 100    # steps between temperature updates in the heating ramp
+    seed: null                   # null = random; integer = reproducible (offset per replica)
 
   leap:
     salt_molarity: 0.150   # enables SPLIT; omit or set to 0 for neutralization-only
@@ -239,6 +254,9 @@ slurm:
       # Full shell command that makes pmemd.cuda available in the classical MD
       # SLURM scripts (run_gpu, NVT chunks) -- not a bare module name.
       amber_module: "module load amber/24"
+      # engine: openmm only -- shell line that makes senda-omm (with OpenMM)
+      # available; added after amber_module. Falls back to senda_env.
+      # openmm_module: "conda activate openmm"
       account: XXXXXXXXXX
 
       gpu:                       # run_gpu (stages 00-03) and NVT production chunks
