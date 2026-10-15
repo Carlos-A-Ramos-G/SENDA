@@ -141,6 +141,18 @@ def test_check_counts_equil_cycles_from_schedule(tmp_path):
     assert r["last_done"] == "03_equil" and r["last_done_prog"] == "3/3"
 
 
+def test_check_takes_last_min_cycle_numerically(tmp_path):
+    from senda.simulation.check import _check_replica
+    (tmp_path / "00_prep").mkdir()
+    (tmp_path / "00_prep" / "structure.parm7").write_text("")
+    (tmp_path / "01_min").mkdir()
+    for i in range(1, 11):   # cycles 1-9 complete, cycle 10 still running
+        text = "   Total wall time:  1    seconds\n" if i < 10 else " NSTEP = 5\n"
+        (tmp_path / "01_min" / f"structure_min_{i}.out").write_text(text)
+    r = _check_replica(tmp_path, total_nvt_chunks=1)
+    assert r["in_progress"] == "01_min"
+    assert r["active_file"].name == "structure_min_10.out"
+
 
 # --- senda-slurm inserts amber_module verbatim ------------------------------
 

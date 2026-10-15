@@ -19,10 +19,19 @@ Success criterion for each stage:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _COMPLETION_MARKER = "Total wall time:"
 _TAIL_BYTES        = 512
+
+
+def _natural(paths) -> list[Path]:
+    """Sort by the run number in the name, so structure_min_10 follows _9 (not _1)."""
+    def key(p: Path):
+        m = re.search(r"_(\d+)\.\w+$", p.name)
+        return (int(m.group(1)) if m else -1, p.name)
+    return sorted(paths, key=key)
 
 
 def _completed(out: Path) -> bool:
@@ -107,7 +116,7 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int, n_equil_amber: int 
     last_done = "00_prep"
 
     # 01_min
-    min_outs = sorted(min_dir.glob("structure_min_[1-9]*.out"))
+    min_outs = _natural(min_dir.glob("structure_min_[1-9]*.out"))
     if not min_outs:
         return _ret()
     n_min_ok = sum(1 for f in min_outs if _completed(f))
@@ -149,7 +158,7 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int, n_equil_amber: int 
         return _ret()
 
     # 04_NVT
-    nvt_outs = sorted(nvt_dir.glob("structure_NVT_[1-9]*.out"))
+    nvt_outs = _natural(nvt_dir.glob("structure_NVT_[1-9]*.out"))
     n_nvt_ok = sum(1 for f in nvt_outs if _completed(f))
     total_label = f"/{total_nvt_chunks}" if total_nvt_chunks else ""
 
