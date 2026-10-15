@@ -220,8 +220,9 @@ with open("restr", "w") as f:
         resns  = [s["residue"] for s in specs]
         anames = [s["name"]    for s in specs]
 
-        if len(set(resns)) == 1:
-            # All atoms in the same residue type:
+        has_index = any("index" in s for s in specs)
+        if len(set(resns)) == 1 and not has_index:
+            # All atoms in the same residue type, no copy selected:
             # generate one &rst block per instance of that residue in the topology.
             atom_lists = [_atom_indices(resns[0], an) for an in anames]
             n_inst = len(atom_lists[0])
@@ -229,12 +230,20 @@ with open("restr", "w") as f:
                 idx = [lst[inst_i] for lst in atom_lists]
                 _write_rst(f, idx, restr)
         else:
-            # Cross-residue: pick one atom per spec.
-            # Use "index" key (0-based) to disambiguate when multiple residues match.
+            # Pick one atom per spec. "index" (0-based; set from "chain" at
+            # setup) selects the residue copy. A spec without "index" inherits
+            # it from the other specs of the same residue when they agree, so
+            # chain: B on one LER atom applies to the whole LER restraint.
+            given = {}
+            for s in specs:
+                if "index" in s:
+                    given.setdefault(s["residue"], set()).add(s["index"])
             idx = []
             for spec in specs:
                 candidates = _atom_indices(spec["residue"], spec["name"])
-                pick = spec.get("index", 0)
+                inherited = given.get(spec["residue"], set())
+                default = next(iter(inherited)) if len(inherited) == 1 else 0
+                pick = spec.get("index", default)
                 if pick >= len(candidates):
                     raise ValueError(
                         f"index={pick} out of range for {spec[\'residue\']} "
