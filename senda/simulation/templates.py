@@ -84,7 +84,7 @@ equilibration cycle __CYCLE__ (restrained NPT)
 __WTDISANG__"""
 
 EQUIL_NVT = """\
-equilibration cycle 6 (unrestrained NVT)
+equilibration cycle __CYCLE__ (unrestrained NVT)
  &cntrl
   imin=0, irest=1, ntx=5,
   nstlim=__NSTLIM__, dt=__DT__,
@@ -413,8 +413,8 @@ cd "$DIR/03_equil"
 log "03_equil: starting"
 cp "$DIR/02_heat/structure_heat.rst7" structure_equil_0.rst7
 
-for ((i=1; i<=6; i++)); do
-    log "03_equil: cycle ${i}/6"
+for ((i=1; i<=__N_EQUIL__; i++)); do
+    log "03_equil: cycle ${i}/__N_EQUIL__"
     pmemd.cuda -O -i equil_${i}.in -o structure_equil_${i}.out \\
                                    -p ../00_prep/__TOPOLOGY__ \\
                                    -c structure_equil_$((i-1)).rst7 \\
@@ -425,7 +425,7 @@ done
 
 # -- 04_NVT -------------------------------------------------------------------
 cd "$DIR/04_NVT"
-cp "$DIR/03_equil/structure_equil_6.rst7" structure_NVT_0.rst7
+cp "$DIR/03_equil/structure_equil___N_EQUIL__.rst7" structure_NVT_0.rst7
 __NVT_LAUNCH__
 """
 

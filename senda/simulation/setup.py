@@ -7,7 +7,8 @@ Directory layout produced:
     00_prep/   -PDB, FF parameters, leap_structure, HMR.ccptraj
     01_min/    -min.in
     02_heat/   -heat.in
-    03_equil/  -equil_1.in to equil_6.in
+    03_equil/  -equil_1.in to equil_<N+1>.in  (N restrained NPT + 1 NVT;
+                N = len(restraints.positional.equil_schedule), default 5)
     04_NVT/    -prod.in, run_NVT_*.cmd  (cluster) or run_NVT_*_local.sh  (local)
     run_gpu    -master SLURM script  (cluster mode)
     run_local  -master bash script   (local mode)
@@ -347,6 +348,8 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
     ))
 
     npt_steps = int(round(float(sim["equil"]["npt_ns"]) * 1000.0 / dt))
+    for stale in (replica_dir / "03_equil").glob("equil_*.in"):
+        stale.unlink()   # a --force re-setup with a shorter schedule
     for cycle, wt in enumerate(equil_sched, start=1):
         (replica_dir / "03_equil" / f"equil_{cycle}.in").write_text(fill(
             EQUIL_NPT,
@@ -356,9 +359,10 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
         ))
 
     nvt_steps = int(round(float(sim["equil"]["nvt_ns"]) * 1000.0 / dt))
-    (replica_dir / "03_equil" / "equil_6.in").write_text(fill(
+    nvt_cycle = len(equil_sched) + 1
+    (replica_dir / "03_equil" / f"equil_{nvt_cycle}.in").write_text(fill(
         EQUIL_NVT,
-        NSTLIM=nvt_steps, DT=dt, TEMP=temp,
+        CYCLE=nvt_cycle, NSTLIM=nvt_steps, DT=dt, TEMP=temp,
         NMROPT=nmropt, WTDISANG=wtdisang,
     ))
 
@@ -418,6 +422,8 @@ def _write_run_scripts(
         leap_block = "tleap -f leap_structure"
 
     max_heat_retries = int((sim.get("heat") or {}).get("max_retries", 5))
+    pos_cfg = restr_cfg.get("positional", {}) or {}
+    n_equil = len(pos_cfg.get("equil_schedule", _DEFAULT_EQUIL_SCHEDULE)) + 1
 
     prod   = sim["production"]
     total  = int(prod["total_chunks"])
@@ -444,6 +450,7 @@ def _write_run_scripts(
             MAXCAP=sim["min"]["max_cycles_cap"],
             CONVTHRESH=sim["min"]["convergence_threshold"],
             MAX_HEAT_RETRIES=max_heat_retries,
+            N_EQUIL=n_equil,
             TOPOLOGY=topology,
             NVT_LAUNCH="sbatch run_NVT_1.cmd",
         )
@@ -474,6 +481,7 @@ def _write_run_scripts(
             MAXCAP=sim["min"]["max_cycles_cap"],
             CONVTHRESH=sim["min"]["convergence_threshold"],
             MAX_HEAT_RETRIES=max_heat_retries,
+            N_EQUIL=n_equil,
             TOPOLOGY=topology,
             NVT_LAUNCH='bash "$DIR/04_NVT/run_NVT_1_local.sh"',
         )

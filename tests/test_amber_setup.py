@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 
+from senda.simulation.setup import _write_input_files, _write_run_scripts
 from senda.simulation.templates import make_restrainer
 from senda.workflow.run import _param_script
 
@@ -74,6 +75,71 @@ def test_cross_residue_defaults_to_first_copy(tmp_path):
     r = {"atoms": [{"residue": "ALA", "name": "CA"}, {"residue": "LER", "name": "C1", "index": 1}],
          **WELL}
     assert _run_restrainer(tmp_path, [r]) == [[2, 9, 0, 0]]
+
+
+# --- equilibration cycle count follows equil_schedule -----------------------
+
+SIM = {
+    "temperature": 300.0,
+    "min": {"maxcyc": 100, "ncyc": 10, "cut": 10.0, "max_cycles_cap": 2,
+            "convergence_threshold": 1e-3},
+    "heat": {"ps": 10},
+    "equil": {"npt_ns": 0.01, "nvt_ns": 0.01},
+    "production": {"ns_per_chunk": 1, "total_chunks": 1, "chunks_per_job": 1},
+    "output": {"ntpr": 100, "ntwx": 100, "ntwr": 100},
+}
+
+
+def _setup(tmp_path, schedule, mode="local"):
+    for d in ("01_min", "02_heat", "03_equil", "04_NVT"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    sim = {**SIM, "restraints": {"positional": {"equil_schedule": schedule}}}
+    topology = _write_input_files(tmp_path, "APO", sim)
+    _write_run_scripts(tmp_path, "APO", "WT", 1, sim, {"amber_module": "module load amber",
+                       "gpu": {}}, topology, mode)
+    return sim
+
+
+def test_equil_cycles_follow_schedule(tmp_path):
+    _setup(tmp_path, [10.0, 5.0, 2.0])
+    ins = sorted(p.name for p in (tmp_path / "03_equil").glob("equil_*.in"))
+    assert ins == ["equil_1.in", "equil_2.in", "equil_3.in", "equil_4.in"]
+    nvt = (tmp_path / "03_equil" / "equil_4.in").read_text()
+    assert "cycle 4 (unrestrained NVT)" in nvt and "ntr=1" not in nvt
+    run = (tmp_path / "run_local").read_text()
+    assert "for ((i=1; i<=4; i++))" in run
+    assert 'cp "$DIR/03_equil/structure_equil_4.rst7" structure_NVT_0.rst7' in run
+
+
+def test_default_schedule_keeps_six_cycles(tmp_path):
+    _setup(tmp_path, [15.0, 12.0, 9.0, 6.0, 3.0], mode="cluster")
+    run = (tmp_path / "run_gpu").read_text()
+    assert "for ((i=1; i<=6; i++))" in run
+    assert 'cp "$DIR/03_equil/structure_equil_6.rst7" structure_NVT_0.rst7' in run
+    assert "cycle 6 (unrestrained NVT)" in (tmp_path / "03_equil" / "equil_6.in").read_text()
+
+
+def test_force_resetup_removes_stale_equil_inputs(tmp_path):
+    _setup(tmp_path, [15.0, 12.0, 9.0, 6.0, 3.0])
+    _setup(tmp_path, [5.0])
+    assert sorted(p.name for p in (tmp_path / "03_equil").glob("equil_*.in")) == \
+        ["equil_1.in", "equil_2.in"]
+
+
+def test_check_counts_equil_cycles_from_schedule(tmp_path):
+    from senda.simulation.check import _check_replica
+    (tmp_path / "00_prep").mkdir()
+    (tmp_path / "00_prep" / "structure.parm7").write_text("")
+    for d in ("01_min", "02_heat", "03_equil", "04_NVT"):
+        (tmp_path / d).mkdir()
+    done = "   Total wall time:  10    seconds\n"
+    (tmp_path / "01_min" / "structure_min_1.out").write_text(done)
+    (tmp_path / "02_heat" / "structure_heat.out").write_text(done)
+    for i in (1, 2, 3):
+        (tmp_path / "03_equil" / f"structure_equil_{i}.out").write_text(done)
+    r = _check_replica(tmp_path, total_nvt_chunks=1, n_equil_amber=3)
+    assert r["last_done"] == "03_equil" and r["last_done_prog"] == "3/3"
+
 
 
 # --- senda-slurm inserts amber_module verbatim ------------------------------

@@ -13,7 +13,8 @@ Success criterion for each stage:
   00_prep  : structure.parm7 exists
   01_min   : last structure_min_N.out has the AMBER completion marker
   02_heat  : structure_heat.out has the AMBER completion marker
-  03_equil : all 6 structure_equil_N.out files have the completion marker
+  03_equil : all structure_equil_N.out files have the completion marker
+             (len(equil_schedule) restrained NPT cycles + 1 NVT)
   04_NVT   : structure_NVT_N.out files up to total_chunks are complete
 """
 from __future__ import annotations
@@ -73,7 +74,7 @@ def _slurm_err(replica_dir: Path) -> Path | None:
     return errs[-1] if errs else None
 
 
-def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
+def _check_replica(replica_dir: Path, total_nvt_chunks: int, n_equil_amber: int = 6) -> dict:
     """
     Returns:
       last_done      : label of last fully completed stage, or None
@@ -87,6 +88,8 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
     heat_dir  = replica_dir / "02_heat"
     equil_dir = replica_dir / "03_equil"
     nvt_dir   = replica_dir / "04_NVT"
+
+    n_equil   = n_equil_amber
 
     last_done      = None
     last_done_prog = ""
@@ -134,14 +137,14 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
         return _ret("02_heat", prog, heat_out)
 
     # 03_equil
-    equil_outs = [equil_dir / f"structure_equil_{i}.out" for i in range(1, 7)]
+    equil_outs = [equil_dir / f"structure_equil_{i}.out" for i in range(1, n_equil + 1)]
     n_equil_ok = sum(1 for f in equil_outs if _completed(f))
-    if n_equil_ok == 6:
+    if n_equil_ok == n_equil:
         last_done = "03_equil"
-        last_done_prog = "6/6"
+        last_done_prog = f"{n_equil}/{n_equil}"
     elif any(f.exists() for f in equil_outs):
         active = next((f for f in equil_outs if f.exists() and not _completed(f)), None)
-        return _ret("03_equil", f"{n_equil_ok}/6", active)
+        return _ret("03_equil", f"{n_equil_ok}/{n_equil}", active)
     else:
         return _ret()
 
@@ -173,6 +176,9 @@ def check_all(
     only_failed:     bool = False,
 ) -> None:
     total_nvt_chunks = int((sim.get("production") or {}).get("total_chunks", 0))
+    from .setup import _DEFAULT_EQUIL_SCHEDULE
+    pos_cfg = ((sim.get("restraints") or {}).get("positional") or {})
+    n_equil_amber = len(pos_cfg.get("equil_schedule", _DEFAULT_EQUIL_SCHEDULE)) + 1
 
     label_w = max(
         len(f"{inh}/{mut}/replica_{n_replicas}")
@@ -198,7 +204,7 @@ def check_all(
                         print(f"  {label:<{label_w}} {'--':<{comp_w}} --")
                     continue
 
-                r = _check_replica(replica_dir, total_nvt_chunks)
+                r = _check_replica(replica_dir, total_nvt_chunks, n_equil_amber)
                 last_done   = r["last_done"]
                 in_progress = r["in_progress"]
 
