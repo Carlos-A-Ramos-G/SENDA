@@ -335,7 +335,7 @@ cd "$DIR"
 # Shared simulation body (stages 00-04) - used by both cluster and local
 # ---------------------------------------------------------------------------
 
-RUN_BODY = """\
+PREP_BODY = """\
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -345,6 +345,9 @@ log "00_prep: tleap"
 __LEAP_BLOCK__
 __HMR_BLOCK__
 __RESTRAINER_BLOCK__
+"""
+
+RUN_BODY = PREP_BODY + """\
 # -- 01_min -------------------------------------------------------------------
 cd "$DIR/01_min"
 log "01_min: starting"
