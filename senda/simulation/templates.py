@@ -449,6 +449,53 @@ __NEXTJOB__"""
 
 
 # ---------------------------------------------------------------------------
+# OpenMM engine (amber_simulator.engine: openmm) - 00_prep is shared with AMBER;
+# stages 01-04 call senda-omm, which reads openmm_params.json.
+# ---------------------------------------------------------------------------
+
+# cpptraj resolves the positional-restraint ambermask to atom numbers, so the
+# selection is identical to what pmemd would use for restraintmask.
+RESTRAINT_MASK_CPPTRAJ = """\
+parm structure.parm7
+trajin structure.rst7
+mask "__MASK__" maskout restraint_atoms.dat
+run
+quit
+"""
+
+RESTRAINT_MASK_BLOCK = """\
+log '00_prep: positional-restraint atoms (cpptraj mask)'
+cpptraj -i restraint_mask.cpptraj > restraint_mask.log"""
+
+RUN_BODY_OPENMM = PREP_BODY + """\
+# -- 01_min / 02_heat / 03_equil (OpenMM) -------------------------------------
+cd "$DIR"
+log "01_min: starting (OpenMM)"
+__OMM__ run --stage min --replica-dir "$DIR"
+
+log "02_heat: starting (OpenMM)"
+__OMM__ run --stage heat --replica-dir "$DIR"
+
+log "03_equil: starting (OpenMM)"
+__OMM__ run --stage equil --replica-dir "$DIR"
+
+# -- 04_NVT -------------------------------------------------------------------
+cd "$DIR/04_NVT"
+__NVT_LAUNCH__
+"""
+
+NVT_JOB_BODY_OPENMM = """\
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+for ((i=__START__; i<=__END__; i++)); do
+    log "NVT chunk ${i}/__TOTAL__ (OpenMM)"
+    __OMM__ run --stage prod --chunk ${i} --replica-dir "$DIR/.."
+done
+__NEXTJOB__"""
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 

@@ -13,6 +13,10 @@ Directory layout produced:
     run_gpu    -master SLURM script  (cluster mode)
     run_local  -master bash script   (local mode)
 
+  With amber_simulator.engine: openmm, the .in files are replaced by a single
+  openmm_params.json in the replica root (read by senda-omm on the compute
+  node) plus 00_prep/restraint_mask.cpptraj; 00_prep is otherwise identical.
+
 Protein PDBs are read from {protein_dir}/{mutant}_{inhibitor}_dimer.pdb.
 Ligand FF parameters are read from {ligands_lib_dir}/{inhibitor}/{inhibitor}.lib
 and .frcmod.  APO systems have no ligand parameters.
@@ -37,7 +41,9 @@ Restraints
 
 from __future__ import annotations
 
+import json
 import math
+import secrets
 import shutil
 import subprocess
 from collections import Counter
@@ -49,6 +55,8 @@ from .templates import (
     RUN_GPU_HEADER, RUN_LOCAL_HEADER,
     NVT_CLUSTER_HEADER, NVT_LOCAL_HEADER,
     RUN_BODY, NVT_JOB_BODY,
+    RESTRAINT_MASK_CPPTRAJ, RESTRAINT_MASK_BLOCK,
+    RUN_BODY_OPENMM, NVT_JOB_BODY_OPENMM,
     fill,
 )
 from senda.analysis.distances import _parse_pdb_residues
@@ -62,6 +70,15 @@ _SUBDIRS = ("00_prep", "01_min", "02_heat", "03_equil", "04_NVT")
 _DEFAULT_RESTRAINT_MASK     = "@CA,C,N,O,H &!:WAT"
 _DEFAULT_HEATING_WT         = 20.0
 _DEFAULT_EQUIL_SCHEDULE     = [15.0, 12.0, 9.0, 6.0, 3.0]
+
+_ENGINES = ("amber", "openmm")
+
+
+def _engine(sim: dict) -> str:
+    engine = str(sim.get("engine", "amber")).lower()
+    if engine not in _ENGINES:
+        raise ValueError(f"amber_simulator.engine must be one of {_ENGINES}, got {engine!r}")
+    return engine
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +397,98 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# OpenMM parameters (engine: openmm)
+# ---------------------------------------------------------------------------
+
+def _write_openmm_params(replica_dir: Path, inh: str, rep: int, sim: dict) -> str:
+    """Write openmm_params.json (+ the cpptraj mask input); return the topology filename.
+
+    Step counts, restraint weights, friction and output intervals reproduce
+    the AMBER .in files written by _write_input_files, so both engines run
+    the same protocol. OpenMM-only knobs live under amber_simulator.openmm.
+    """
+    use_hmr  = bool(sim.get("use_hmr", True))
+    dt       = 0.004 if use_hmr else 0.002
+    topology = "structure_HMR.parm7" if use_hmr else "structure.parm7"
+    temp     = float(sim["temperature"])
+    omm      = sim.get("openmm") or {}
+
+    restr_cfg   = sim.get("restraints", {}) or {}
+    has_nmr     = bool(_get_nmr_list(sim, inh)) or bool(restr_cfg.get("custom_restrainer"))
+    pos_cfg     = restr_cfg.get("positional", {}) or {}
+    restr_mask  = pos_cfg.get("mask",            _DEFAULT_RESTRAINT_MASK)
+    heating_wt  = pos_cfg.get("heating_weight",  _DEFAULT_HEATING_WT)
+    equil_sched = pos_cfg.get("equil_schedule",  _DEFAULT_EQUIL_SCHEDULE)
+
+    # Explicit seeds (AMBER uses ig=-1): reproducible, and distinct per replica.
+    seed = omm.get("seed")
+    seed = (int(seed) + 100_003 * rep) if seed is not None else secrets.randbelow(2**31 - 1) + 1
+
+    min_cfg    = sim["min"]
+    heat_steps = int(round(float(sim["heat"]["ps"]) / dt))
+    npt_steps  = int(round(float(sim["equil"]["npt_ns"]) * 1000.0 / dt))
+    nvt_steps  = int(round(float(sim["equil"]["nvt_ns"]) * 1000.0 / dt))
+    prod       = sim["production"]
+    out_cfg    = sim["output"]
+    prod_steps = int(round(float(prod["ns_per_chunk"]) * 1000.0 / dt))
+
+    cycles = [{"nstlim": npt_steps, "restraint_wt": float(wt), "npt": True}
+              for wt in equil_sched]
+    cycles.append({"nstlim": nvt_steps, "restraint_wt": 0.0, "npt": False})
+
+    params = {
+        "engine":                "openmm",
+        "topology":              topology,
+        "dt_ps":                 dt,
+        "temperature":           temp,
+        "cut":                   float(omm.get("cut", 10.0)),
+        "ewald_error_tolerance": float(omm.get("ewald_error_tolerance", 5.0e-4)),
+        "pressure_bar":          float(omm.get("pressure_bar", 1.0)),
+        "barostat_interval":     int(omm.get("barostat_interval", 100)),
+        "platform":              omm.get("platform", "CUDA"),
+        "precision":             omm.get("precision", "mixed"),
+        "seed":                  seed,
+        "nmr":                   "restr" if has_nmr else None,
+        "positional_mask":       restr_mask,
+        "positional_atoms":      "00_prep/restraint_atoms.dat",
+        "min": {
+            "maxcyc":                int(min_cfg["maxcyc"]),
+            "cut":                   float(min_cfg["cut"]),
+            "max_cycles_cap":        int(min_cfg["max_cycles_cap"]),
+            "convergence_threshold": float(min_cfg["convergence_threshold"]),
+        },
+        "heat": {
+            "nstlim":          heat_steps,
+            "ramp_end":        int(round(0.8 * heat_steps)),
+            "t_start":         1.0,
+            "restraint_wt":    float(heating_wt),
+            "gamma_ln":        5.0,
+            "ntpr": 500, "ntwx": 1000, "ntwr": 500,
+            "max_retries":     int((sim.get("heat") or {}).get("max_retries", 5)),
+            "update_interval": int(omm.get("heat_update_interval", 100)),
+        },
+        "equil": {
+            "cycles":   cycles,
+            "gamma_ln": 5.0,
+            "ntpr": 1000, "ntwx": 1000,
+        },
+        "prod": {
+            "nstlim":       prod_steps,
+            "gamma_ln":     1.0,
+            "ntpr":         int(out_cfg["ntpr"]),
+            "ntwx":         int(out_cfg["ntwx"]),
+            "ntwr":         int(out_cfg["ntwr"]),
+            "total_chunks": int(prod["total_chunks"]),
+        },
+    }
+    (replica_dir / "openmm_params.json").write_text(json.dumps(params, indent=2) + "\n")
+    (replica_dir / "00_prep" / "restraint_mask.cpptraj").write_text(
+        fill(RESTRAINT_MASK_CPPTRAJ, MASK=restr_mask)
+    )
+    return topology
+
+
+# ---------------------------------------------------------------------------
 # Run scripts (cluster and local)
 # ---------------------------------------------------------------------------
 
@@ -403,11 +512,18 @@ def _write_run_scripts(
     use_hmr  = bool(sim.get("use_hmr", True))
     restr_cfg = sim.get("restraints", {}) or {}
     has_nmr  = bool(_get_nmr_list(sim, inh)) or bool(restr_cfg.get("custom_restrainer"))
+    openmm   = _engine(sim) == "openmm"
+    omm_cfg  = sim.get("openmm") or {}
+    omm_cmd  = omm_cfg.get("command", "senda-omm")
+    run_body = fill(RUN_BODY_OPENMM, OMM=omm_cmd) if openmm else RUN_BODY
+    nvt_body_tmpl = fill(NVT_JOB_BODY_OPENMM, OMM=omm_cmd) if openmm else NVT_JOB_BODY
 
     hmr_block = (
         "log '00_prep: HMR'\ncpptraj -i HMR.ccptraj"
         if use_hmr else "# HMR disabled"
     )
+    if openmm:
+        hmr_block += "\n" + RESTRAINT_MASK_BLOCK
     restrainer_block = (
         'cd "$DIR"\nlog "Generating NMR restraints"\npython restrainer.py\n'
         if has_nmr else ""
@@ -433,6 +549,10 @@ def _write_run_scripts(
 
     if mode == "cluster":
         module   = slurm["amber_module"]
+        # tleap/cpptraj (00_prep) still need AmberTools; senda-omm needs the OpenMM env.
+        omm_env  = slurm.get("openmm_module") or slurm.get("senda_env") or ""
+        if openmm and omm_env:
+            module = f"{module}\n{omm_env}"
         slurm_gpu = slurm["gpu"]
         extra_sbatch = sbatch_lines(
             slurm_gpu, reserved=set(), account=slurm.get("account") or "",
@@ -443,7 +563,7 @@ def _write_run_scripts(
             EXTRA_SBATCH=extra_sbatch, MODULE=module,
             REPLICA_DIR=str(replica_dir.resolve()),
         )
-        body = fill(RUN_BODY,
+        body = fill(run_body,
             LEAP_BLOCK=leap_block,
             HMR_BLOCK=hmr_block,
             RESTRAINER_BLOCK=restrainer_block,
@@ -464,7 +584,7 @@ def _write_run_scripts(
                 JOBNAME=_job_name(inh, mut, rep, chunk=job_idx),
                 EXTRA_SBATCH=extra_sbatch, MODULE=module,
             )
-            nvt_body = fill(NVT_JOB_BODY,
+            nvt_body = fill(nvt_body_tmpl,
                 START=start, END=end, TOTAL=total,
                 TOPOLOGY=topology, NEXTJOB=next_job,
             )
@@ -472,9 +592,11 @@ def _write_run_scripts(
 
     else:  # local
         amber_setup = _amber_setup_line(sim.get("amber_home", ""))
+        if openmm and omm_cfg.get("env_setup"):
+            amber_setup = f"{amber_setup}\n{omm_cfg['env_setup']}"
 
         header = fill(RUN_LOCAL_HEADER, AMBER_SETUP=amber_setup)
-        body   = fill(RUN_BODY,
+        body   = fill(run_body,
             LEAP_BLOCK=leap_block,
             HMR_BLOCK=hmr_block,
             RESTRAINER_BLOCK=restrainer_block,
@@ -496,7 +618,7 @@ def _write_run_scripts(
                 AMBER_SETUP=amber_setup,
                 START=start, END=end, TOTAL=total,
             )
-            nvt_body = fill(NVT_JOB_BODY,
+            nvt_body = fill(nvt_body_tmpl,
                 START=start, END=end, TOTAL=total,
                 TOPOLOGY=topology, NEXTJOB=next_job,
             )
@@ -590,8 +712,11 @@ def setup_replica(
     elif nmr_list:
         _write_exe(replica_dir / "restrainer.py", make_restrainer(nmr_list))
 
-    # AMBER input files
-    topology = _write_input_files(replica_dir, inh, sim)
+    # Engine input: AMBER .in files, or openmm_params.json for senda-omm
+    if _engine(sim) == "openmm":
+        topology = _write_openmm_params(replica_dir, inh, rep, sim)
+    else:
+        topology = _write_input_files(replica_dir, inh, sim)
 
     # Run scripts
     _write_run_scripts(replica_dir, inh, mut, rep, sim, slurm, topology, mode)
@@ -645,6 +770,7 @@ def setup_all(
                 )
 
     print("\nSetup complete.")
+    print(f"  Engine: {_engine(sim)}")
     print(f"  HMR: {use_hmr}  (dt = {dt} ps)")
     print(f"  Production: {prod['total_chunks']} x {prod['ns_per_chunk']} ns "
           f"= {prod['total_chunks'] * prod['ns_per_chunk']} ns per replica")
