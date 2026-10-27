@@ -8,13 +8,17 @@ Entry point for `senda-integration` subcommands:
              estimate, and plots the resulting PMF.
 
 Usage:
-  senda-integration --config config.yaml string [-i INH] [-m MUT]
+  senda-integration --config config.yaml string [-i INH] [-m MUT] [-c CHAIN]
 
 Without -i/-m: processes every inhibitor under qmmm.string.inhibitors that's
 also present in the top-level inhibitors: list (or all of them if that list
 is empty), and every mutant from the per-inhibitor or top-level mutants:
 list. -i/-m each explicitly select one inhibitor/mutant, bypassing those
 filters entirely -- even for a pair not listed anywhere else in the config.
+
+-c CHAIN must match whatever chain senda-qmmm string was run with (default:
+chains[0]) -- it selects which _chain{CHAIN}-suffixed 07_QMMM_string
+results/ to integrate.
 
 Requires the external ndfes/ndfes-PrintFES.py tools in $PATH, and
 matplotlib (pip install -e ".[analysis]") for the PMF plot.
@@ -43,7 +47,7 @@ def main_string(args):
     cwd = args.config.parent
     for inh, mut, inh_cfg in _iter_pairs(cfg, args.inh, args.mut):
         print(f"\n[integration string] {inh}/{mut}")
-        setup(inh, mut, inh_cfg, cfg, cwd)
+        setup(inh, mut, inh_cfg, cfg, cwd, chain=args.chain)
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -56,6 +60,11 @@ def _add_common(p: argparse.ArgumentParser) -> None:
                    help="Run only for this mutant -- bypasses the per-inhibitor/"
                         "top-level mutants: fallback entirely, even for a mutant "
                         "not listed anywhere in the config")
+    p.add_argument("-c", "--chain", default=None, metavar="CHAIN",
+                   help="Which michaelis_complex.chains entry senda-qmmm string "
+                        "was run with (default: chains[0], e.g. 'A') -- selects "
+                        "which _chain{CHAIN}-suffixed 07_QMMM_string results to "
+                        "integrate")
 
 
 def main(argv=None):

@@ -8,16 +8,23 @@ Entry point for `senda-qmmm` subcommands:
   string  -- stage 07: adaptive string method setup
 
 Usage:
-  senda-qmmm --config config.yaml equil  [-s] [-i INH] [-m MUT]
-  senda-qmmm --config config.yaml prod   [-s] [-a JOBID] [-i INH] [-m MUT]
-  senda-qmmm --config config.yaml scan   [-s] [-a JOBID] [-i INH] [-m MUT]
-  senda-qmmm --config config.yaml string [-s] [-a JOBID] [-i INH] [-m MUT]
+  senda-qmmm --config config.yaml equil  [-s] [-i INH] [-m MUT] [-c CHAIN]
+  senda-qmmm --config config.yaml prod   [-s] [-a JOBID] [-i INH] [-m MUT] [-c CHAIN]
+  senda-qmmm --config config.yaml scan   [-s] [-a JOBID] [-i INH] [-m MUT] [-c CHAIN]
+  senda-qmmm --config config.yaml string [-s] [-a JOBID] [-i INH] [-m MUT] [-c CHAIN]
 
 Without -i/-m: processes every inhibitor under qmmm.string.inhibitors that's
 also present in the top-level inhibitors: list (or all of them if that list
 is empty), and every mutant from the per-inhibitor or top-level mutants:
 list. -i/-m each explicitly select one inhibitor/mutant, bypassing those
 filters entirely -- even for a pair not listed anywhere else in the config.
+
+Without -c: builds the QM/MM system from michaelis_complex.chains[0] (e.g.
+"A"), writing to the same paths every prior run used. -c CHAIN selects a
+different chain (e.g. "B") -- its cached artifacts and stage directories
+are suffixed "_chain{CHAIN}" so they don't overwrite the default chain's
+output. scan/prod/string must be given the same -c value equil was run
+with, since they read back that chain's cached metadata.
 """
 from __future__ import annotations
 
@@ -70,7 +77,7 @@ def main_equil(args):
     cwd     = args.config.parent
     for inh, mut, inh_cfg in _iter_pairs(cfg, args.inh, args.mut):
         print(f"\n[equil] {inh}/{mut}")
-        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit)
+        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, chain=args.chain)
 
 
 def main_prod(args):
@@ -79,7 +86,7 @@ def main_prod(args):
     cwd = args.config.parent
     for inh, mut, inh_cfg in _iter_pairs(cfg, args.inh, args.mut):
         print(f"\n[prod] {inh}/{mut}")
-        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after)
+        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after, chain=args.chain)
 
 
 def main_scan(args):
@@ -88,7 +95,7 @@ def main_scan(args):
     cwd = args.config.parent
     for inh, mut, inh_cfg in _iter_pairs(cfg, args.inh, args.mut):
         print(f"\n[scan] {inh}/{mut}")
-        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after)
+        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after, chain=args.chain)
 
 
 def main_string(args):
@@ -97,7 +104,7 @@ def main_string(args):
     cwd = args.config.parent
     for inh, mut, inh_cfg in _iter_pairs(cfg, args.inh, args.mut):
         print(f"\n[string] {inh}/{mut}")
-        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after)
+        setup(inh, mut, inh_cfg, cfg, cwd, submit=args.submit, after=args.after, chain=args.chain)
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -110,6 +117,12 @@ def _add_common(p: argparse.ArgumentParser) -> None:
                    help="Run only for this mutant -- bypasses the per-inhibitor/"
                         "top-level mutants: fallback entirely, even for a mutant "
                         "not listed anywhere in the config")
+    p.add_argument("-c", "--chain", default=None, metavar="CHAIN",
+                   help="Which michaelis_complex.chains entry to build the QM/MM "
+                        "system from (default: chains[0], e.g. 'A'). Any chain "
+                        "other than the default writes to _chain{CHAIN}-suffixed "
+                        "cache files/directories so it doesn't overwrite the "
+                        "default chain's output.")
     p.add_argument("-s", "--submit", action="store_true",
                    help="Submit SLURM job after writing files")
 

@@ -29,6 +29,7 @@ from ..common.atoms import (
     resolve_stage_cfg,
     find_h10_atoms,
     count_protein_residues,
+    chain_tag,
 )
 from ..common.h10 import generate_h10_topology
 from ..common.cvs import (
@@ -45,12 +46,19 @@ def setup(
     cfg:      dict,
     cwd:      Path,
     submit:   bool = False,
+    chain:    str | None = None,
 ) -> None:
     """
     Set up the QM/MM equilibration stage for one inhibitor/mutant pair.
 
     Resolves atoms, builds the H10 topology, writes all input files,
     and optionally submits the SLURM job.
+
+    chain: which michaelis_complex.chains entry to build the QM/MM system
+    from (defaults to chains[0], e.g. "A"). Cached artifacts and the stage
+    directory are suffixed with "_chain{chain}" for any non-default chain
+    (see common.atoms.chain_tag) so multiple chains can be set up for the
+    same inhibitor/mutant without overwriting each other.
     """
     from senda.analysis.distances import (
         _find_pdb,
@@ -63,7 +71,8 @@ def setup(
     mc_cfg      = cfg.get("michaelis_complex") or {}
     protein_dir = cwd / mc_cfg.get("output_dir", "protein")
     chains      = mc_cfg.get("chains") or ["A"]
-    chain       = chains[0]  # QM/MM uses chain A representative
+    chain       = chain or chains[0]
+    tag         = chain_tag(chain, chains)
 
     # Per-stage config blocks, computed here (not just at their own stage)
     # because extra_restraints atom specs for ALL three stages are resolved
@@ -193,7 +202,7 @@ def setup(
 
     # H10 topology
     h10_atoms = find_h10_atoms(cv_indices_flat, top_atoms, top_residues)
-    h10_path  = sim_base / "structure_H10.parm7"
+    h10_path  = sim_base / f"structure_H10{tag}.parm7"
     generate_h10_topology(top_path, h10_atoms, h10_path)
 
     # Guess interpolation (write here so scan can reuse)
@@ -213,7 +222,7 @@ def setup(
         print(f"  Interpolating guess: {guess_data.shape[0]} -> {n_nodes} nodes")
         guess_data = interpolate_guess(guess_data, n_nodes)
     # Cache interpolated guess for scan/string stages
-    guess_cache = sim_base / "_guess_interpolated.npy"
+    guess_cache = sim_base / f"_guess_interpolated{tag}.npy"
     import numpy as np
     np.save(str(guess_cache), guess_data)
 
@@ -221,7 +230,7 @@ def setup(
     n_protein_res = count_protein_residues(top_residues)
 
     # Create stage directory
-    stage_dir = sim_base / "05_QMMM_equilibration"
+    stage_dir = sim_base / f"05_QMMM_equilibration{tag}"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     # Restraints (restr file): equil.extra_restraints (atom specs resolved
@@ -293,7 +302,8 @@ def setup(
         print(f"  sbatch: {result.stdout.strip() or result.stderr.strip()}")
 
     # Store resolved metadata for downstream stages
-    _write_stage_metadata(sim_base, {
+    _write_stage_metadata(sim_base, tag, {
+        "chain":             chain,
         "qmmask":            qmmask,
         "qmcharge":          qmcharge,
         "qm_theory":         inh_cfg.get("qm_theory", "DFTB3"),
@@ -326,15 +336,15 @@ def _build_restr_file(extra_restraints: list) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_stage_metadata(sim_base: Path, meta: dict) -> None:
+def _write_stage_metadata(sim_base: Path, tag: str, meta: dict) -> None:
     import json
-    path = sim_base / "_qmmm_string_meta.json"
+    path = sim_base / f"_qmmm_string_meta{tag}.json"
     path.write_text(json.dumps(meta, indent=2))
 
 
-def _load_stage_metadata(sim_base: Path) -> dict:
+def _load_stage_metadata(sim_base: Path, tag: str = "") -> dict:
     import json
-    path = sim_base / "_qmmm_string_meta.json"
+    path = sim_base / f"_qmmm_string_meta{tag}.json"
     if not path.exists():
         raise FileNotFoundError(
             f"Stage metadata not found at {path}\n"

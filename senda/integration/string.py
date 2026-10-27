@@ -22,7 +22,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from ..qmmm.common.atoms import resolve_stage_cfg
+from ..qmmm.common.atoms import resolve_stage_cfg, chain_tag
 
 
 def convert_sampling_to_wham(results_dir: Path, temp: float) -> None:
@@ -225,13 +225,21 @@ def plot_pmf(pmf_path: Path, out_path: Path, label: str) -> None:
     plt.close(fig)
 
 
-def setup(inh: str, mut: str, inh_cfg: dict, cfg: dict, cwd: Path) -> None:
+def setup(inh: str, mut: str, inh_cfg: dict, cfg: dict, cwd: Path, chain: str | None = None) -> None:
     """
     Run PMF integration for one inhibitor/mutant pair's stage 07 sampling
     output: convert to WHAM/MBAR/vFEP input, run chunked MBAR, and plot.
+
+    chain: which michaelis_complex.chains entry stage 07 was built for
+    (defaults to chains[0]); must match the chain senda-qmmm string was
+    run with.
     """
+    chains      = (cfg.get("michaelis_complex") or {}).get("chains") or ["A"]
+    chain       = chain or chains[0]
+    tag         = chain_tag(chain, chains)
+
     sim_base    = cwd / "simulations" / inh / mut
-    results_dir = sim_base / "07_QMMM_string" / "results"
+    results_dir = sim_base / f"07_QMMM_string{tag}" / "results"
     if not results_dir.is_dir():
         raise FileNotFoundError(
             f"{results_dir} not found -- run 'senda-qmmm string' and let the "

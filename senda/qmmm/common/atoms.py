@@ -33,6 +33,18 @@ def resolve_stage_cfg(inh_cfg: dict, string_cfg_top: dict, stage: str) -> dict:
     return {**shared, **inh_stage}
 
 
+def chain_tag(chain: str, chains: list) -> str:
+    """
+    Filename/directory suffix for a given chain -- "" for the default chain
+    (chains[0], e.g. the existing chain-A runs) so their paths stay exactly
+    as before; "_chain{X}" for any other chain, so per-mutant cached
+    artifacts (H10 topology, stage metadata, guess cache, stage directories)
+    never collide between chains.
+    """
+    default_chain = chains[0] if chains else "A"
+    return "" if chain == default_chain else f"_chain{chain}"
+
+
 # ---------------------------------------------------------------------------
 # Standard protein residue names (used to detect backbone atoms)
 # ---------------------------------------------------------------------------

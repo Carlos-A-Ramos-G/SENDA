@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 from .equil import _load_stage_metadata
+from ..common.atoms import chain_tag
 from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP, STAGE05_IN, PROD_SLURM
 
 
@@ -28,18 +29,26 @@ def setup(
     cwd:      Path,
     submit:   bool = False,
     after:    str | None = None,
+    chain:    str | None = None,
 ) -> None:
     """
     Set up the restraint-free QM/MM production stage for one inhibitor/mutant pair.
 
     Reads metadata from stage 05 (equil).  No atom resolution is repeated here.
+
+    chain: which michaelis_complex.chains entry stage 05 was built for
+    (defaults to chains[0]); must match the chain equil was run with.
     """
+    chains   = (cfg.get("michaelis_complex") or {}).get("chains") or ["A"]
+    chain    = chain or chains[0]
+    tag      = chain_tag(chain, chains)
+
     sim_base = cwd / "simulations" / inh / mut
-    meta     = _load_stage_metadata(sim_base)
+    meta     = _load_stage_metadata(sim_base, tag)
     qmmask   = meta["qmmask"]
     qmcharge = meta["qmcharge"]
 
-    stage_dir = sim_base / "05_QMMM_restraint_free"
+    stage_dir = sim_base / f"05_QMMM_restraint_free{tag}"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}

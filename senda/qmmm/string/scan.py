@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from .equil import _load_stage_metadata
-from ..common.atoms import resolve_stage_cfg
+from ..common.atoms import resolve_stage_cfg, chain_tag
 from ..common.cvs import build_rst_block
 from ..common.templates import fill, sbatch_lines, DEFAULT_ENV_SETUP, SCAN_IN_TEMPLATE, SCAN_SLURM, CENTER_SH
 
@@ -34,16 +34,24 @@ def setup(
     cwd:      Path,
     submit:   bool = False,
     after:    str | None = None,
+    chain:    str | None = None,
 ) -> None:
     """
     Set up the restrained scan stage for one inhibitor/mutant pair.
 
     Reads metadata and cached guess from stage 05.
     Writes all restraint files, the AMBER input template, and the SLURM script.
+
+    chain: which michaelis_complex.chains entry stage 05 was built for
+    (defaults to chains[0]); must match the chain equil was run with.
     """
+    chains    = (cfg.get("michaelis_complex") or {}).get("chains") or ["A"]
+    chain     = chain or chains[0]
+    tag       = chain_tag(chain, chains)
+
     sim_base  = cwd / "simulations" / inh / mut
-    meta      = _load_stage_metadata(sim_base)
-    guess     = np.load(str(sim_base / "_guess_interpolated.npy"))  # (n_nodes, n_cvs)
+    meta      = _load_stage_metadata(sim_base, tag)
+    guess     = np.load(str(sim_base / f"_guess_interpolated{tag}.npy"))  # (n_nodes, n_cvs)
 
     n_nodes           = meta["n_nodes"]
     cv_indices_per_cv = meta["cv_indices_per_cv"]
@@ -55,7 +63,7 @@ def setup(
             "Re-run stage 05 (equil) to rebuild the cache."
         )
 
-    stage_dir = sim_base / "06_QMMM_scan"
+    stage_dir = sim_base / f"06_QMMM_scan{tag}"
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     string_cfg_top = (cfg.get("qmmm") or {}).get("string") or {}
