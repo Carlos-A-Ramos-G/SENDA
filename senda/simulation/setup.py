@@ -7,10 +7,15 @@ Directory layout produced:
     00_prep/   -PDB, FF parameters, leap_structure, HMR.ccptraj
     01_min/    -min.in
     02_heat/   -heat.in
-    03_equil/  -equil_1.in to equil_6.in
+    03_equil/  -equil_1.in to equil_<N+1>.in  (N restrained NPT + 1 NVT;
+                N = len(restraints.positional.equil_schedule), default 5)
     04_NVT/    -prod.in, run_NVT_*.cmd  (cluster) or run_NVT_*_local.sh  (local)
     run_gpu    -master SLURM script  (cluster mode)
     run_local  -master bash script   (local mode)
+
+  With amber_simulator.engine: openmm, the .in files are replaced by a single
+  openmm_params.json in the replica root (read by senda-omm on the compute
+  node) plus 00_prep/restraint_mask.cpptraj; 00_prep is otherwise identical.
 
 Protein PDBs are read from {protein_dir}/{mutant}_{inhibitor}_dimer.pdb.
 Ligand FF parameters are read from {ligands_lib_dir}/{inhibitor}/{inhibitor}.lib
@@ -36,7 +41,9 @@ Restraints
 
 from __future__ import annotations
 
+import json
 import math
+import secrets
 import shutil
 import subprocess
 from collections import Counter
@@ -48,6 +55,8 @@ from .templates import (
     RUN_GPU_HEADER, RUN_LOCAL_HEADER,
     NVT_CLUSTER_HEADER, NVT_LOCAL_HEADER,
     RUN_BODY, NVT_JOB_BODY,
+    RESTRAINT_MASK_CPPTRAJ, RESTRAINT_MASK_BLOCK,
+    RUN_BODY_OPENMM, NVT_JOB_BODY_OPENMM,
     fill,
 )
 from senda.analysis.distances import _parse_pdb_residues
@@ -61,6 +70,15 @@ _SUBDIRS = ("00_prep", "01_min", "02_heat", "03_equil", "04_NVT")
 _DEFAULT_RESTRAINT_MASK     = "@CA,C,N,O,H &!:WAT"
 _DEFAULT_HEATING_WT         = 20.0
 _DEFAULT_EQUIL_SCHEDULE     = [15.0, 12.0, 9.0, 6.0, 3.0]
+
+_ENGINES = ("amber", "openmm")
+
+
+def _engine(sim: dict) -> str:
+    engine = str(sim.get("engine", "amber")).lower()
+    if engine not in _ENGINES:
+        raise ValueError(f"amber_simulator.engine must be one of {_ENGINES}, got {engine!r}")
+    return engine
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +365,8 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
     ))
 
     npt_steps = int(round(float(sim["equil"]["npt_ns"]) * 1000.0 / dt))
+    for stale in (replica_dir / "03_equil").glob("equil_*.in"):
+        stale.unlink()   # a --force re-setup with a shorter schedule
     for cycle, wt in enumerate(equil_sched, start=1):
         (replica_dir / "03_equil" / f"equil_{cycle}.in").write_text(fill(
             EQUIL_NPT,
@@ -356,9 +376,10 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
         ))
 
     nvt_steps = int(round(float(sim["equil"]["nvt_ns"]) * 1000.0 / dt))
-    (replica_dir / "03_equil" / "equil_6.in").write_text(fill(
+    nvt_cycle = len(equil_sched) + 1
+    (replica_dir / "03_equil" / f"equil_{nvt_cycle}.in").write_text(fill(
         EQUIL_NVT,
-        NSTLIM=nvt_steps, DT=dt, TEMP=temp,
+        CYCLE=nvt_cycle, NSTLIM=nvt_steps, DT=dt, TEMP=temp,
         NMROPT=nmropt, WTDISANG=wtdisang,
     ))
 
@@ -372,6 +393,98 @@ def _write_input_files(replica_dir: Path, inh: str, sim: dict) -> str:
         NMROPT=nmropt, WTDISANG=wtdisang,
     ))
 
+    return topology
+
+
+# ---------------------------------------------------------------------------
+# OpenMM parameters (engine: openmm)
+# ---------------------------------------------------------------------------
+
+def _write_openmm_params(replica_dir: Path, inh: str, rep: int, sim: dict) -> str:
+    """Write openmm_params.json (+ the cpptraj mask input); return the topology filename.
+
+    Step counts, restraint weights, friction and output intervals reproduce
+    the AMBER .in files written by _write_input_files, so both engines run
+    the same protocol. OpenMM-only knobs live under amber_simulator.openmm.
+    """
+    use_hmr  = bool(sim.get("use_hmr", True))
+    dt       = 0.004 if use_hmr else 0.002
+    topology = "structure_HMR.parm7" if use_hmr else "structure.parm7"
+    temp     = float(sim["temperature"])
+    omm      = sim.get("openmm") or {}
+
+    restr_cfg   = sim.get("restraints", {}) or {}
+    has_nmr     = bool(_get_nmr_list(sim, inh)) or bool(restr_cfg.get("custom_restrainer"))
+    pos_cfg     = restr_cfg.get("positional", {}) or {}
+    restr_mask  = pos_cfg.get("mask",            _DEFAULT_RESTRAINT_MASK)
+    heating_wt  = pos_cfg.get("heating_weight",  _DEFAULT_HEATING_WT)
+    equil_sched = pos_cfg.get("equil_schedule",  _DEFAULT_EQUIL_SCHEDULE)
+
+    # Explicit seeds (AMBER uses ig=-1): reproducible, and distinct per replica.
+    seed = omm.get("seed")
+    seed = (int(seed) + 100_003 * rep) if seed is not None else secrets.randbelow(2**31 - 1) + 1
+
+    min_cfg    = sim["min"]
+    heat_steps = int(round(float(sim["heat"]["ps"]) / dt))
+    npt_steps  = int(round(float(sim["equil"]["npt_ns"]) * 1000.0 / dt))
+    nvt_steps  = int(round(float(sim["equil"]["nvt_ns"]) * 1000.0 / dt))
+    prod       = sim["production"]
+    out_cfg    = sim["output"]
+    prod_steps = int(round(float(prod["ns_per_chunk"]) * 1000.0 / dt))
+
+    cycles = [{"nstlim": npt_steps, "restraint_wt": float(wt), "npt": True}
+              for wt in equil_sched]
+    cycles.append({"nstlim": nvt_steps, "restraint_wt": 0.0, "npt": False})
+
+    params = {
+        "engine":                "openmm",
+        "topology":              topology,
+        "dt_ps":                 dt,
+        "temperature":           temp,
+        "cut":                   float(omm.get("cut", 10.0)),
+        "ewald_error_tolerance": float(omm.get("ewald_error_tolerance", 5.0e-4)),
+        "pressure_bar":          float(omm.get("pressure_bar", 1.0)),
+        "barostat_interval":     int(omm.get("barostat_interval", 100)),
+        "platform":              omm.get("platform", "CUDA"),
+        "precision":             omm.get("precision", "mixed"),
+        "seed":                  seed,
+        "nmr":                   "restr" if has_nmr else None,
+        "positional_mask":       restr_mask,
+        "positional_atoms":      "00_prep/restraint_atoms.dat",
+        "min": {
+            "maxcyc":                int(min_cfg["maxcyc"]),
+            "cut":                   float(min_cfg["cut"]),
+            "max_cycles_cap":        int(min_cfg["max_cycles_cap"]),
+            "convergence_threshold": float(min_cfg["convergence_threshold"]),
+        },
+        "heat": {
+            "nstlim":          heat_steps,
+            "ramp_end":        int(round(0.8 * heat_steps)),
+            "t_start":         1.0,
+            "restraint_wt":    float(heating_wt),
+            "gamma_ln":        5.0,
+            "ntpr": 500, "ntwx": 1000, "ntwr": 500,
+            "max_retries":     int((sim.get("heat") or {}).get("max_retries", 5)),
+            "update_interval": int(omm.get("heat_update_interval", 100)),
+        },
+        "equil": {
+            "cycles":   cycles,
+            "gamma_ln": 5.0,
+            "ntpr": 1000, "ntwx": 1000,
+        },
+        "prod": {
+            "nstlim":       prod_steps,
+            "gamma_ln":     1.0,
+            "ntpr":         int(out_cfg["ntpr"]),
+            "ntwx":         int(out_cfg["ntwx"]),
+            "ntwr":         int(out_cfg["ntwr"]),
+            "total_chunks": int(prod["total_chunks"]),
+        },
+    }
+    (replica_dir / "openmm_params.json").write_text(json.dumps(params, indent=2) + "\n")
+    (replica_dir / "00_prep" / "restraint_mask.cpptraj").write_text(
+        fill(RESTRAINT_MASK_CPPTRAJ, MASK=restr_mask)
+    )
     return topology
 
 
@@ -399,11 +512,18 @@ def _write_run_scripts(
     use_hmr  = bool(sim.get("use_hmr", True))
     restr_cfg = sim.get("restraints", {}) or {}
     has_nmr  = bool(_get_nmr_list(sim, inh)) or bool(restr_cfg.get("custom_restrainer"))
+    openmm   = _engine(sim) == "openmm"
+    omm_cfg  = sim.get("openmm") or {}
+    omm_cmd  = omm_cfg.get("command", "senda-omm")
+    run_body = fill(RUN_BODY_OPENMM, OMM=omm_cmd) if openmm else RUN_BODY
+    nvt_body_tmpl = fill(NVT_JOB_BODY_OPENMM, OMM=omm_cmd) if openmm else NVT_JOB_BODY
 
     hmr_block = (
         "log '00_prep: HMR'\ncpptraj -i HMR.ccptraj"
         if use_hmr else "# HMR disabled"
     )
+    if openmm:
+        hmr_block += "\n" + RESTRAINT_MASK_BLOCK
     restrainer_block = (
         'cd "$DIR"\nlog "Generating NMR restraints"\npython restrainer.py\n'
         if has_nmr else ""
@@ -411,13 +531,17 @@ def _write_run_scripts(
 
     leap_cfg      = sim.get("leap") or {}
     salt_molarity = float(leap_cfg.get("salt_molarity", 0))
-    if salt_molarity:
+    if prebuilt_stem(sim, inh, mut) is not None:
+        leap_block = 'log "00_prep: prebuilt topology (structure.parm7/.rst7 copied at setup, no tleap)"'
+    elif salt_molarity:
         pdb_name   = f"{mut}_{inh}_dimer.pdb"
-        leap_block = fill(SPLIT_LEAP_BLOCK, PDB_NAME=pdb_name, MOLARITY=salt_molarity)
+        leap_block = 'log "00_prep: tleap"\n' + fill(SPLIT_LEAP_BLOCK, PDB_NAME=pdb_name, MOLARITY=salt_molarity)
     else:
-        leap_block = "tleap -f leap_structure"
+        leap_block = 'log "00_prep: tleap"\ntleap -f leap_structure'
 
     max_heat_retries = int((sim.get("heat") or {}).get("max_retries", 5))
+    pos_cfg = restr_cfg.get("positional", {}) or {}
+    n_equil = len(pos_cfg.get("equil_schedule", _DEFAULT_EQUIL_SCHEDULE)) + 1
 
     prod   = sim["production"]
     total  = int(prod["total_chunks"])
@@ -427,6 +551,10 @@ def _write_run_scripts(
 
     if mode == "cluster":
         module   = slurm["amber_module"]
+        # tleap/cpptraj (00_prep) still need AmberTools; senda-omm needs the OpenMM env.
+        omm_env  = slurm.get("openmm_module") or slurm.get("senda_env") or ""
+        if openmm and omm_env:
+            module = f"{module}\n{omm_env}"
         slurm_gpu = slurm["gpu"]
         extra_sbatch = sbatch_lines(
             slurm_gpu, reserved=set(), account=slurm.get("account") or "",
@@ -437,13 +565,14 @@ def _write_run_scripts(
             EXTRA_SBATCH=extra_sbatch, MODULE=module,
             REPLICA_DIR=str(replica_dir.resolve()),
         )
-        body = fill(RUN_BODY,
+        body = fill(run_body,
             LEAP_BLOCK=leap_block,
             HMR_BLOCK=hmr_block,
             RESTRAINER_BLOCK=restrainer_block,
             MAXCAP=sim["min"]["max_cycles_cap"],
             CONVTHRESH=sim["min"]["convergence_threshold"],
             MAX_HEAT_RETRIES=max_heat_retries,
+            N_EQUIL=n_equil,
             TOPOLOGY=topology,
             NVT_LAUNCH="sbatch run_NVT_1.cmd",
         )
@@ -457,7 +586,7 @@ def _write_run_scripts(
                 JOBNAME=_job_name(inh, mut, rep, chunk=job_idx),
                 EXTRA_SBATCH=extra_sbatch, MODULE=module,
             )
-            nvt_body = fill(NVT_JOB_BODY,
+            nvt_body = fill(nvt_body_tmpl,
                 START=start, END=end, TOTAL=total,
                 TOPOLOGY=topology, NEXTJOB=next_job,
             )
@@ -465,15 +594,18 @@ def _write_run_scripts(
 
     else:  # local
         amber_setup = _amber_setup_line(sim.get("amber_home", ""))
+        if openmm and omm_cfg.get("env_setup"):
+            amber_setup = f"{amber_setup}\n{omm_cfg['env_setup']}"
 
         header = fill(RUN_LOCAL_HEADER, AMBER_SETUP=amber_setup)
-        body   = fill(RUN_BODY,
+        body   = fill(run_body,
             LEAP_BLOCK=leap_block,
             HMR_BLOCK=hmr_block,
             RESTRAINER_BLOCK=restrainer_block,
             MAXCAP=sim["min"]["max_cycles_cap"],
             CONVTHRESH=sim["min"]["convergence_threshold"],
             MAX_HEAT_RETRIES=max_heat_retries,
+            N_EQUIL=n_equil,
             TOPOLOGY=topology,
             NVT_LAUNCH='bash "$DIR/04_NVT/run_NVT_1_local.sh"',
         )
@@ -488,7 +620,7 @@ def _write_run_scripts(
                 AMBER_SETUP=amber_setup,
                 START=start, END=end, TOTAL=total,
             )
-            nvt_body = fill(NVT_JOB_BODY,
+            nvt_body = fill(nvt_body_tmpl,
                 START=start, END=end, TOTAL=total,
                 TOPOLOGY=topology, NEXTJOB=next_job,
             )
@@ -498,6 +630,66 @@ def _write_run_scripts(
 def _write_exe(path: Path, content: str) -> None:
     path.write_text(content)
     path.chmod(0o755)
+
+
+# ---------------------------------------------------------------------------
+# Prebuilt topologies (amber_simulator.prebuilt)
+# ---------------------------------------------------------------------------
+
+def prebuilt_pairs(sim: dict) -> dict[str, list[str]]:
+    """
+    {inhibitor: [mutant, ...]} listed under amber_simulator.prebuilt.
+
+      amber_simulator:
+        prebuilt:
+          L02: {S1: path/to/4H4E_S1_solv, S2: path/to/4H4E_S2_solv}
+
+    Each value is a file stem: <stem>.prmtop, <stem>.inpcrd and <stem>.pdb must
+    exist. Only the listed pairs are set up (no inhibitor x mutant product), and
+    00_prep copies these files instead of running tleap -- for systems whose
+    topology tleap cannot be told to build from SENDA's template (e.g. metal
+    clusters with covalent bonds to the protein).
+    """
+    raw = sim.get("prebuilt") or {}
+    if not isinstance(raw, dict):
+        raise ValueError("amber_simulator.prebuilt must be a dict {inhibitor: {mutant: stem}}")
+    return {inh: list(muts or {}) for inh, muts in raw.items()}
+
+
+def prebuilt_stem(sim: dict, inh: str, mut: str) -> Path | None:
+    stem = ((sim.get("prebuilt") or {}).get(inh) or {}).get(mut)
+    return Path(stem).expanduser() if stem else None
+
+
+def _parm7_natom(path: Path) -> int:
+    lines = path.read_text().splitlines()
+    i = next(k for k, l in enumerate(lines) if l.startswith("%FLAG POINTERS"))
+    return int(lines[i + 2].split()[0])
+
+
+def _rst7_natom(path: Path) -> int:
+    with open(path) as fh:
+        fh.readline()
+        return int(fh.readline().split()[0])
+
+
+def _copy_prebuilt(stem: Path, prep_dir: Path, inh: str, mut: str) -> Path:
+    """Copy <stem>.prmtop/.inpcrd/.pdb into 00_prep under SENDA's names; return the PDB."""
+    src = {ext: Path(f"{stem}{ext}") for ext in (".prmtop", ".inpcrd", ".pdb")}
+    missing = [str(p) for p in src.values() if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"prebuilt files for {inh}/{mut} not found: {missing}")
+    n_top, n_crd = _parm7_natom(src[".prmtop"]), _rst7_natom(src[".inpcrd"])
+    if n_top != n_crd:
+        raise ValueError(
+            f"prebuilt {inh}/{mut}: {src['.prmtop'].name} has {n_top} atoms but "
+            f"{src['.inpcrd'].name} has {n_crd}"
+        )
+    shutil.copy(src[".prmtop"], prep_dir / "structure.parm7")
+    shutil.copy(src[".inpcrd"], prep_dir / "structure.rst7")
+    pdb = prep_dir / f"{mut}_{inh}_dimer.pdb"
+    shutil.copy(src[".pdb"], pdb)
+    return pdb
 
 
 # ---------------------------------------------------------------------------
@@ -520,17 +712,23 @@ def setup_replica(
     for d in _SUBDIRS:
         (replica_dir / d).mkdir(parents=True, exist_ok=True)
 
-    # PDB -copy directly from protein/ (already clean from senda-complex)
-    src_pdb = protein_dir / f"{mut}_{inh}_dimer.pdb"
-    if not src_pdb.exists():
-        raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
-    shutil.copy(src_pdb, replica_dir / "00_prep" / src_pdb.name)
+    stem = prebuilt_stem(sim, inh, mut)
+    if stem is not None:
+        # Validated topology built elsewhere: copied as is, no tleap
+        src_pdb = _copy_prebuilt(stem, replica_dir / "00_prep", inh, mut)
+    else:
+        # PDB -copy directly from protein/ (already clean from senda-complex)
+        src_pdb = protein_dir / f"{mut}_{inh}_dimer.pdb"
+        if not src_pdb.exists():
+            raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
+        shutil.copy(src_pdb, replica_dir / "00_prep" / src_pdb.name)
 
-    disulfide_bonds = _resolve_disulfide_bonds(disulfides or [], src_pdb)
+    disulfide_bonds = (_resolve_disulfide_bonds(disulfides or [], src_pdb)
+                       if stem is None else [])
 
-    # Ligand FF parameters (not needed for APO)
+    # Ligand FF parameters (not needed for APO or prebuilt topologies)
     has_ligand = (inh != "APO")
-    if has_ligand:
+    if has_ligand and stem is None:
         for ext in (".lib", ".frcmod"):
             src = ligands_lib_dir / inh / f"{inh}{ext}"
             if not src.exists():
@@ -542,7 +740,7 @@ def setup_replica(
 
     # Extra lib/frcmod files (cofactors, modified residues, etc.)
     leap_cfg = sim.get("leap") or {}
-    for path_str in leap_cfg.get("extra_libs", []):
+    for path_str in (leap_cfg.get("extra_libs", []) if stem is None else []):
         src = Path(path_str)
         if not src.exists():
             raise FileNotFoundError(f"Extra lib/frcmod not found: {src}")
@@ -550,7 +748,9 @@ def setup_replica(
 
     # tleap input
     salt_molarity = float(leap_cfg.get("salt_molarity", 0))
-    if salt_molarity:
+    if stem is not None:
+        pass
+    elif salt_molarity:
         (replica_dir / "00_prep" / "leap_count").write_text(
             _render_leap_count(inh, mut, has_ligand, leap_cfg)
         )
@@ -582,8 +782,11 @@ def setup_replica(
     elif nmr_list:
         _write_exe(replica_dir / "restrainer.py", make_restrainer(nmr_list))
 
-    # AMBER input files
-    topology = _write_input_files(replica_dir, inh, sim)
+    # Engine input: AMBER .in files, or openmm_params.json for senda-omm
+    if _engine(sim) == "openmm":
+        topology = _write_openmm_params(replica_dir, inh, rep, sim)
+    else:
+        topology = _write_input_files(replica_dir, inh, sim)
 
     # Run scripts
     _write_run_scripts(replica_dir, inh, mut, rep, sim, slurm, topology, mode)
@@ -637,6 +840,7 @@ def setup_all(
                 )
 
     print("\nSetup complete.")
+    print(f"  Engine: {_engine(sim)}")
     print(f"  HMR: {use_hmr}  (dt = {dt} ps)")
     print(f"  Production: {prod['total_chunks']} x {prod['ns_per_chunk']} ns "
           f"= {prod['total_chunks'] * prod['ns_per_chunk']} ns per replica")

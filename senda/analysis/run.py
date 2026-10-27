@@ -60,6 +60,13 @@ def main() -> None:
     chains      = mc_cfg.get("chains") or ["A"]
     protein_dir = cwd / mc_cfg.get("output_dir", "protein")
 
+    # amber_simulator.prebuilt lists the (inhibitor, mutant) pairs that exist
+    from senda.simulation.setup import prebuilt_pairs
+    prebuilt = {} if args.mutants else prebuilt_pairs(cfg.get("amber_simulator") or {})
+    if prebuilt:
+        inhibitors = [i for i in prebuilt if not inhibitors or i in inhibitors]
+        mutants    = sorted({m for i in inhibitors for m in prebuilt[i]})
+
     if not inhibitors:
         sys.exit("Error: no inhibitors specified (config or --inhibitors)")
     if not mutants:
@@ -98,7 +105,7 @@ def main() -> None:
                 print(f"Skipping {inh}: no reactive_distances configured")
                 continue
 
-            for mut in mutants:
+            for mut in (prebuilt.get(inh, []) if prebuilt else mutants):
                 print(f"\n=== {inh} / {mut} ===")
                 try:
                     analyse(inh, mut, dist_specs, rdf_specs, n_replicas, chains, protein_dir, cwd,

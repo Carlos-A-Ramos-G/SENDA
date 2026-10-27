@@ -13,6 +13,7 @@ Optional:
 - **RDKit** — automatic net charge detection for `senda-param`
 - **ParmEd** — topology inspection via `senda-sim topology_info`
 - **scipy, matplotlib, pytraj** — trajectory analysis via `senda-analyse`
+- **OpenMM >= 8.1** — MD stages 01-04 with `amber_simulator.engine: openmm` (`pip install -e ".[openmm]"`)
 
 ## Installation
 
@@ -274,6 +275,22 @@ The MD protocol applied to each replica is:
 
 Heating uses the Berendsen barostat (`barostat=1`) for stability during the far-from-equilibrium temperature ramp, then switches to the Monte Carlo barostat for equilibration. If heating crashes, the run script retries automatically (up to `heat.max_retries` attempts), restarting from the last written checkpoint if one exists.
 
+### Prebuilt topologies
+
+When a system cannot be built from SENDA's tleap template (for example a metal cluster with covalent bonds to the protein), build it elsewhere and list it under `amber_simulator.prebuilt`. Each entry is a file stem: `<stem>.prmtop`, `<stem>.inpcrd` and `<stem>.pdb` must exist.
+
+```yaml
+amber_simulator:
+  prebuilt:
+    L02: {S1: /path/to/4H4E_S1_solv, S2: /path/to/4H4E_S2_solv}
+    L03: {S1p: /path/to/4H4E_S1p_solv}
+```
+
+- Only the listed (inhibitor, mutant) pairs are set up, not every inhibitor × mutant combination. `inhibitors:` can still narrow the selection, and `mutants:` may be left empty.
+- `00_prep` receives `structure.parm7`, `structure.rst7` and `{mutant}_{inhibitor}_dimer.pdb`.
+- Ligand libraries, `extra_libs` and tleap are skipped. HMR, the positional-restraint mask and the NMR restrainer run as usual.
+- Setup stops if a file is missing or if the prmtop and inpcrd atom counts differ.
+
 ### Ion placement -- SPLIT method
 
 By default, senda neutralises the system with `addions Na+ 0`. To add NaCl at a specific concentration using the SPLIT method (Machado & Pantano, *J. Chem. Theory Comput.* 2020), set `leap.salt_molarity` in the config:
@@ -293,6 +310,36 @@ Two types of restraints are supported, both optional:
 **Positional restraints** -- backbone atoms held during heating and NPT equilibration. The mask, heating weight, and per-cycle schedule are configurable.
 
 **NMR restraints** -- distance, angle, or dihedral restraints written to an AMBER DISANG file at job time (after tleap builds the topology). Must be a dict keyed by inhibitor name; each inhibitor's restraints are applied only to that inhibitor's topology. Omit an inhibitor's key (or set it to `[]`) for no NMR restraints for that inhibitor. Not limited to ligand atoms -- a resname can be protein, ligand, or anything else in the topology, so this works for APO systems too.
+
+### OpenMM engine
+
+Stages `01_min` to `04_NVT` can run on OpenMM instead of `pmemd.cuda`:
+
+```yaml
+amber_simulator:
+  engine: openmm          # default: amber
+  openmm:
+    platform: CUDA        # CUDA | OpenCL | CPU | Reference
+    precision: mixed      # CUDA/OpenCL only
+    command: senda-omm    # or "/path/to/env/bin/python -m senda.simulation.openmm_engine"
+```
+
+`00_prep` is unchanged: tleap still builds `structure(_HMR).parm7`, and OpenMM loads that file directly. Force-field parameters, HMR masses and atom order are therefore the same for both engines. `senda-sim setup` writes `openmm_params.json` in each replica root instead of the `.in` files. The run scripts call `senda-omm run --stage {min,heat,equil,prod}`, which needs `openmm` installed in its environment (`pip install -e ".[openmm]"`). AmberTools must still be on `$PATH` for tleap and cpptraj in `00_prep`. On a cluster, `slurm.openmm_module` (falling back to `slurm.senda_env`) is added after `amber_module`. In local mode, use `amber_simulator.openmm.env_setup`.
+
+Outputs keep the AMBER names: `<name>.rst7` restarts and `<name>.nc` AMBER NetCDF trajectories. Each run also writes `<name>.xml` (OpenMM state, used for exact continuation), `<name>.log` (energies, temperature and density as CSV) and `<name>.done` (completion marker). `senda-sim check`, `senda-analyse` and the QM/MM stages work unchanged. MD runs resume from their last checkpoint (written every `ntwr` steps) when interrupted.
+
+Same protocol (step counts, restraint weights, friction, output intervals). What is handled differently:
+
+| AMBER | OpenMM engine |
+|---|---|
+| `restraintmask` (ambermask) | Resolved to atom numbers by `cpptraj mask` in `00_prep` (the same mask parser pmemd uses) |
+| `ntr=1`, `restraint_wt` (E = k·Δr², no ½) | `CustomExternalForce` with `periodicdistance`, k × 418.4 → kJ/mol/nm² |
+| `nmropt=1` + DISANG `&rst` | The same `restr` file is parsed into flat-bottom `CustomCompoundBondForce`s using AMBER's functional form; dihedrals are wrapped around the r2–r3 midpoint. Only the `iat`/`r1-r4`/`rk2`/`rk3` form is supported |
+| Heating: Berendsen barostat + `&wt TEMP0` ramp | MC barostat (OpenMM has no Berendsen); the temperature is updated every `heat_update_interval` steps: linear ramp 1 K → T over 80% of the steps, then an explicit hold at T |
+| Heating retry (restarts with the reference moved to the crashed checkpoint) | Resumes from the last checkpoint at its step; the restraint reference stays the minimised structure |
+| SD/CG minimisation (`ncyc` ignored) | L-BFGS (`LocalEnergyMinimizer`), same RMS-gradient convergence loop, unconstrained like `ntc=1` |
+| `ig=-1` | Explicit seed per replica in `openmm_params.json` (`openmm.seed` for reproducible runs) |
+| Coulomb constant 332.0522 (18.2223²) | 332.0637 (CODATA), so electrostatic energies are ~3.5e-5 higher in relative terms. Bonded, vdW, dispersion and restraint energies match `sander` exactly on the same parm7 |
 
 ---
 

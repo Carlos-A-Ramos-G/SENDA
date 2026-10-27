@@ -38,14 +38,17 @@ def _header(
     out:        str,
     err:        str,
     spec:       dict,
-    modules:    list[str] | None = None,
+    env_lines:  list[str] | None = None,
     senda_env:  str = "",
 ) -> str:
     """Build the SBATCH preamble for a SLURM script. Every SLURM field in
     *spec* (time, ntasks, partition, account, qos, mem, gres, ...) is
     optional -- whatever's present is emitted, whatever's absent is
     skipped, so this works regardless of which fields a given cluster
-    actually needs."""
+    actually needs.
+
+    *env_lines* are full shell commands (e.g. slurm.amber_module =
+    "module load amber/24") inserted verbatim, exactly as run_gpu does."""
     lines = [
         "#!/bin/bash",
         sbatch_lines(spec, reserved=set()),
@@ -54,8 +57,7 @@ def _header(
         f"#SBATCH --error={err}",
         "",
     ]
-    for mod in (modules or []):
-        lines.append(f"module load {mod}")
+    lines.extend(env_lines or [])
     if senda_env:
         lines.append(senda_env)
     lines += ["", "set -euo pipefail", 'cd "${SLURM_SUBMIT_DIR}"', ""]
@@ -81,7 +83,7 @@ def _param_script(slurm: dict, config: str, out_dir: str) -> str:
         out       = f"{out_dir}/senda_param-%j.out",
         err       = f"{out_dir}/senda_param-%j.err",
         spec      = spec,
-        modules   = [slurm["amber_module"]],
+        env_lines = [slurm["amber_module"]],
         senda_env = senda_env,
     )
     return head + f"senda-param --config {config}\n"

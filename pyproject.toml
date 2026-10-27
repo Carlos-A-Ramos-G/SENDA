@@ -13,11 +13,14 @@ dependencies = ["pyyaml", "numpy", "biopython"]
 rdkit    = ["rdkit"]
 analysis = ["scipy", "matplotlib", "pytraj"]
 qmmm     = ["parmed", "pytraj"]
+openmm   = ["openmm>=8.1"]
+test     = ["pytest"]
 
 [project.scripts]
 senda-param       = "senda.ligand_parameters.run:main"
 senda-complex     = "senda.michaelis_complex.run:main"
 senda-sim         = "senda.simulation.run:main"
+senda-omm         = "senda.simulation.openmm_engine.cli:main"
 senda-slurm       = "senda.workflow.run:main"
 senda-analyse     = "senda.analysis.run:main"
 senda-qmmm        = "senda.qmmm.string.run:main"

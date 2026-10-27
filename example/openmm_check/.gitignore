@@ -1,0 +1,10 @@
+# Inputs copied from the AMBER run and everything generated here.
+00_prep/
+amber_replica/
+amber_config.yaml
+restr
+openmm_run/
+energy_check/
+report/
+*.log
+openmm_check-*.out

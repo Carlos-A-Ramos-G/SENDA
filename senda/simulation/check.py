@@ -13,18 +13,41 @@ Success criterion for each stage:
   00_prep  : structure.parm7 exists
   01_min   : last structure_min_N.out has the AMBER completion marker
   02_heat  : structure_heat.out has the AMBER completion marker
-  03_equil : all 6 structure_equil_N.out files have the completion marker
+  03_equil : all structure_equil_N.out files have the completion marker
+             (len(equil_schedule) restrained NPT cycles + 1 NVT)
   04_NVT   : structure_NVT_N.out files up to total_chunks are complete
+
+OpenMM engine replicas (openmm_params.json in the replica root) are detected
+automatically: the per-run file is <name>.log (StateDataReporter CSV) and a run
+is complete when its <name>.done marker exists; the number of 03_equil cycles
+and the heating nstlim come from openmm_params.json.
 """
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 _COMPLETION_MARKER = "Total wall time:"
 _TAIL_BYTES        = 512
 
 
+def _natural(paths) -> list[Path]:
+    """Sort by the run number in the name, so structure_min_10 follows _9 (not _1)."""
+    def key(p: Path):
+        m = re.search(r"_(\d+)\.\w+$", p.name)
+        return (int(m.group(1)) if m else -1, p.name)
+    return sorted(paths, key=key)
+
+
+def _openmm_params(replica_dir: Path) -> dict | None:
+    path = replica_dir / "openmm_params.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
 def _completed(out: Path) -> bool:
+    if out.suffix == ".log":    # OpenMM engine: completion marker next to the log
+        return out.with_suffix(".done").exists()
     if not out.exists() or out.stat().st_size == 0:
         return False
     with out.open("rb") as fh:
@@ -33,8 +56,18 @@ def _completed(out: Path) -> bool:
 
 
 def _parse_nstep(out: Path) -> int | None:
-    """Return the last NSTEP value recorded in an AMBER .out file."""
+    """Return the last NSTEP value recorded in an AMBER .out (or OpenMM .log) file."""
     if not out.exists() or out.stat().st_size == 0:
+        return None
+    if out.suffix == ".log":
+        with out.open("rb") as fh:
+            fh.seek(max(0, out.stat().st_size - 8192))
+            lines = fh.read().decode("utf-8", errors="replace").splitlines()
+        for line in reversed(lines):
+            try:
+                return int(line.split(",")[0])
+            except ValueError:
+                pass
         return None
     with out.open("rb") as fh:
         fh.seek(max(0, out.stat().st_size - 8192))
@@ -73,7 +106,7 @@ def _slurm_err(replica_dir: Path) -> Path | None:
     return errs[-1] if errs else None
 
 
-def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
+def _check_replica(replica_dir: Path, total_nvt_chunks: int, n_equil_amber: int = 6) -> dict:
     """
     Returns:
       last_done      : label of last fully completed stage, or None
@@ -87,6 +120,12 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
     heat_dir  = replica_dir / "02_heat"
     equil_dir = replica_dir / "03_equil"
     nvt_dir   = replica_dir / "04_NVT"
+
+    omm_params = _openmm_params(replica_dir)
+    ext        = ".log" if omm_params else ".out"
+    n_equil    = len(omm_params["equil"]["cycles"]) if omm_params else n_equil_amber
+    heat_nstlim = (omm_params["heat"]["nstlim"] if omm_params
+                   else _parse_nstlim(heat_dir / "heat.in"))
 
     last_done      = None
     last_done_prog = ""
@@ -104,7 +143,7 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
     last_done = "00_prep"
 
     # 01_min
-    min_outs = sorted(min_dir.glob("structure_min_[1-9]*.out"))
+    min_outs = _natural(min_dir.glob(f"structure_min_[1-9]*{ext}"))
     if not min_outs:
         return _ret()
     n_min_ok = sum(1 for f in min_outs if _completed(f))
@@ -115,16 +154,16 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
         return _ret("01_min", f"{n_min_ok}/{len(min_outs)} stages", min_outs[-1])
 
     # 02_heat
-    heat_out = heat_dir / "structure_heat.out"
+    heat_out = heat_dir / f"structure_heat{ext}"
     if not heat_out.exists():
         return _ret()
     if _completed(heat_out):
         last_done = "02_heat"
-        nstlim = _parse_nstlim(heat_dir / "heat.in")
+        nstlim = heat_nstlim
         last_done_prog = f"{nstlim} steps" if nstlim else "ok"
     else:
         nstep  = _parse_nstep(heat_out)
-        nstlim = _parse_nstlim(heat_dir / "heat.in")
+        nstlim = heat_nstlim
         if nstep is not None and nstlim:
             prog = f"{nstep}/{nstlim} steps"
         elif nstep is not None:
@@ -134,19 +173,19 @@ def _check_replica(replica_dir: Path, total_nvt_chunks: int) -> dict:
         return _ret("02_heat", prog, heat_out)
 
     # 03_equil
-    equil_outs = [equil_dir / f"structure_equil_{i}.out" for i in range(1, 7)]
+    equil_outs = [equil_dir / f"structure_equil_{i}{ext}" for i in range(1, n_equil + 1)]
     n_equil_ok = sum(1 for f in equil_outs if _completed(f))
-    if n_equil_ok == 6:
+    if n_equil_ok == n_equil:
         last_done = "03_equil"
-        last_done_prog = "6/6"
+        last_done_prog = f"{n_equil}/{n_equil}"
     elif any(f.exists() for f in equil_outs):
         active = next((f for f in equil_outs if f.exists() and not _completed(f)), None)
-        return _ret("03_equil", f"{n_equil_ok}/6", active)
+        return _ret("03_equil", f"{n_equil_ok}/{n_equil}", active)
     else:
         return _ret()
 
     # 04_NVT
-    nvt_outs = sorted(nvt_dir.glob("structure_NVT_[1-9]*.out"))
+    nvt_outs = _natural(nvt_dir.glob(f"structure_NVT_[1-9]*{ext}"))
     n_nvt_ok = sum(1 for f in nvt_outs if _completed(f))
     total_label = f"/{total_nvt_chunks}" if total_nvt_chunks else ""
 
@@ -173,6 +212,9 @@ def check_all(
     only_failed:     bool = False,
 ) -> None:
     total_nvt_chunks = int((sim.get("production") or {}).get("total_chunks", 0))
+    from .setup import _DEFAULT_EQUIL_SCHEDULE
+    pos_cfg = ((sim.get("restraints") or {}).get("positional") or {})
+    n_equil_amber = len(pos_cfg.get("equil_schedule", _DEFAULT_EQUIL_SCHEDULE)) + 1
 
     label_w = max(
         len(f"{inh}/{mut}/replica_{n_replicas}")
@@ -198,7 +240,7 @@ def check_all(
                         print(f"  {label:<{label_w}} {'--':<{comp_w}} --")
                     continue
 
-                r = _check_replica(replica_dir, total_nvt_chunks)
+                r = _check_replica(replica_dir, total_nvt_chunks, n_equil_amber)
                 last_done   = r["last_done"]
                 in_progress = r["in_progress"]
 

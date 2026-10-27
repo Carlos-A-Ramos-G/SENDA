@@ -84,7 +84,7 @@ equilibration cycle __CYCLE__ (restrained NPT)
 __WTDISANG__"""
 
 EQUIL_NVT = """\
-equilibration cycle 6 (unrestrained NVT)
+equilibration cycle __CYCLE__ (unrestrained NVT)
  &cntrl
   imin=0, irest=1, ntx=5,
   nstlim=__NSTLIM__, dt=__DT__,
@@ -220,8 +220,9 @@ with open("restr", "w") as f:
         resns  = [s["residue"] for s in specs]
         anames = [s["name"]    for s in specs]
 
-        if len(set(resns)) == 1:
-            # All atoms in the same residue type:
+        has_index = any("index" in s for s in specs)
+        if len(set(resns)) == 1 and not has_index:
+            # All atoms in the same residue type, no copy selected:
             # generate one &rst block per instance of that residue in the topology.
             atom_lists = [_atom_indices(resns[0], an) for an in anames]
             n_inst = len(atom_lists[0])
@@ -229,12 +230,20 @@ with open("restr", "w") as f:
                 idx = [lst[inst_i] for lst in atom_lists]
                 _write_rst(f, idx, restr)
         else:
-            # Cross-residue: pick one atom per spec.
-            # Use "index" key (0-based) to disambiguate when multiple residues match.
+            # Pick one atom per spec. "index" (0-based; set from "chain" at
+            # setup) selects the residue copy. A spec without "index" inherits
+            # it from the other specs of the same residue when they agree, so
+            # chain: B on one LER atom applies to the whole LER restraint.
+            given = {}
+            for s in specs:
+                if "index" in s:
+                    given.setdefault(s["residue"], set()).add(s["index"])
             idx = []
             for spec in specs:
                 candidates = _atom_indices(spec["residue"], spec["name"])
-                pick = spec.get("index", 0)
+                inherited = given.get(spec["residue"], set())
+                default = next(iter(inherited)) if len(inherited) == 1 else 0
+                pick = spec.get("index", default)
                 if pick >= len(candidates):
                     raise ValueError(
                         f"index={pick} out of range for {spec[\'residue\']} "
@@ -326,16 +335,18 @@ cd "$DIR"
 # Shared simulation body (stages 00-04) - used by both cluster and local
 # ---------------------------------------------------------------------------
 
-RUN_BODY = """\
+PREP_BODY = """\
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 # -- 00_prep ------------------------------------------------------------------
 cd "$DIR/00_prep"
-log "00_prep: tleap"
 __LEAP_BLOCK__
 __HMR_BLOCK__
 __RESTRAINER_BLOCK__
+"""
+
+RUN_BODY = PREP_BODY + """\
 # -- 01_min -------------------------------------------------------------------
 cd "$DIR/01_min"
 log "01_min: starting"
@@ -404,8 +415,8 @@ cd "$DIR/03_equil"
 log "03_equil: starting"
 cp "$DIR/02_heat/structure_heat.rst7" structure_equil_0.rst7
 
-for ((i=1; i<=6; i++)); do
-    log "03_equil: cycle ${i}/6"
+for ((i=1; i<=__N_EQUIL__; i++)); do
+    log "03_equil: cycle ${i}/__N_EQUIL__"
     pmemd.cuda -O -i equil_${i}.in -o structure_equil_${i}.out \\
                                    -p ../00_prep/__TOPOLOGY__ \\
                                    -c structure_equil_$((i-1)).rst7 \\
@@ -416,7 +427,7 @@ done
 
 # -- 04_NVT -------------------------------------------------------------------
 cd "$DIR/04_NVT"
-cp "$DIR/03_equil/structure_equil_6.rst7" structure_NVT_0.rst7
+cp "$DIR/03_equil/structure_equil___N_EQUIL__.rst7" structure_NVT_0.rst7
 __NVT_LAUNCH__
 """
 
@@ -432,6 +443,53 @@ for ((i=__START__; i<=__END__; i++)); do
                   -c structure_NVT_$((i-1)).rst7 \\
                   -r structure_NVT_${i}.rst7 \\
                   -x structure_NVT_${i}.nc
+done
+__NEXTJOB__"""
+
+
+# ---------------------------------------------------------------------------
+# OpenMM engine (amber_simulator.engine: openmm) - 00_prep is shared with AMBER;
+# stages 01-04 call senda-omm, which reads openmm_params.json.
+# ---------------------------------------------------------------------------
+
+# cpptraj resolves the positional-restraint ambermask to atom numbers, so the
+# selection is identical to what pmemd would use for restraintmask.
+RESTRAINT_MASK_CPPTRAJ = """\
+parm structure.parm7
+trajin structure.rst7
+mask "__MASK__" maskout restraint_atoms.dat
+run
+quit
+"""
+
+RESTRAINT_MASK_BLOCK = """\
+log '00_prep: positional-restraint atoms (cpptraj mask)'
+cpptraj -i restraint_mask.cpptraj > restraint_mask.log"""
+
+RUN_BODY_OPENMM = PREP_BODY + """\
+# -- 01_min / 02_heat / 03_equil (OpenMM) -------------------------------------
+cd "$DIR"
+log "01_min: starting (OpenMM)"
+__OMM__ run --stage min --replica-dir "$DIR"
+
+log "02_heat: starting (OpenMM)"
+__OMM__ run --stage heat --replica-dir "$DIR"
+
+log "03_equil: starting (OpenMM)"
+__OMM__ run --stage equil --replica-dir "$DIR"
+
+# -- 04_NVT -------------------------------------------------------------------
+cd "$DIR/04_NVT"
+__NVT_LAUNCH__
+"""
+
+NVT_JOB_BODY_OPENMM = """\
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+for ((i=__START__; i<=__END__; i++)); do
+    log "NVT chunk ${i}/__TOTAL__ (OpenMM)"
+    __OMM__ run --stage prod --chunk ${i} --replica-dir "$DIR/.."
 done
 __NEXTJOB__"""
 
