@@ -341,7 +341,6 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 # -- 00_prep ------------------------------------------------------------------
 cd "$DIR/00_prep"
-log "00_prep: tleap"
 __LEAP_BLOCK__
 __HMR_BLOCK__
 __RESTRAINER_BLOCK__

@@ -275,6 +275,22 @@ The MD protocol applied to each replica is:
 
 Heating uses the Berendsen barostat (`barostat=1`) for stability during the far-from-equilibrium temperature ramp, then switches to the Monte Carlo barostat for equilibration. If heating crashes, the run script retries automatically (up to `heat.max_retries` attempts), restarting from the last written checkpoint if one exists.
 
+### Prebuilt topologies
+
+When a system cannot be built from SENDA's tleap template (for example a metal cluster with covalent bonds to the protein), build it elsewhere and list it under `amber_simulator.prebuilt`. Each entry is a file stem: `<stem>.prmtop`, `<stem>.inpcrd` and `<stem>.pdb` must exist.
+
+```yaml
+amber_simulator:
+  prebuilt:
+    L02: {S1: /path/to/4H4E_S1_solv, S2: /path/to/4H4E_S2_solv}
+    L03: {S1p: /path/to/4H4E_S1p_solv}
+```
+
+- Only the listed (inhibitor, mutant) pairs are set up, not every inhibitor × mutant combination. `inhibitors:` can still narrow the selection, and `mutants:` may be left empty.
+- `00_prep` receives `structure.parm7`, `structure.rst7` and `{mutant}_{inhibitor}_dimer.pdb`.
+- Ligand libraries, `extra_libs` and tleap are skipped. HMR, the positional-restraint mask and the NMR restrainer run as usual.
+- Setup stops if a file is missing or if the prmtop and inpcrd atom counts differ.
+
 ### Ion placement -- SPLIT method
 
 By default, senda neutralises the system with `addions Na+ 0`. To add NaCl at a specific concentration using the SPLIT method (Machado & Pantano, *J. Chem. Theory Comput.* 2020), set `leap.salt_molarity` in the config:

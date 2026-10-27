@@ -78,13 +78,24 @@ def main() -> None:
     mutants    = cfg.get("mutants")    or []
     n_replicas = int(cfg.get("replicas", 1))
 
+    sim   = cfg.get("amber_simulator") or {}
+    slurm = cfg.get("slurm")           or {}
+
+    # amber_simulator.prebuilt lists the (inhibitor, mutant) pairs itself;
+    # otherwise every inhibitor is combined with every mutant
+    from .setup import prebuilt_pairs
+    pairs = prebuilt_pairs(sim)
+    if pairs:
+        if inhibitors:
+            pairs = {inh: muts for inh, muts in pairs.items() if inh in inhibitors}
+        inhibitors = list(pairs)
+        mutants    = sorted({m for muts in pairs.values() for m in muts})
     if not inhibitors:
         sys.exit("Config error: 'inhibitors' list is empty or missing.")
     if not mutants:
         sys.exit("Config error: 'mutants' list is empty or missing.")
-
-    sim   = cfg.get("amber_simulator") or {}
-    slurm = cfg.get("slurm")           or {}
+    groups = ([([inh], muts) for inh, muts in pairs.items()] if pairs
+              else [(inhibitors, mutants)])
 
     # Resolve mode: CLI flag > config execution_mode > default cluster
     cfg_mode = sim.get("execution_mode", "cluster")
@@ -107,29 +118,33 @@ def main() -> None:
 
     from .setup import setup_all, submit_all
 
-    if args.command == "setup":
-        setup_all(
-            inhibitors, mutants, n_replicas,
-            sim, slurm,
-            protein_dir, ligands_lib_dir, simulations_dir,
-            mode=mode, force=args.force,
-            disulfides=disulfides,
-        )
-        if args.submit:
-            submit_all(inhibitors, mutants, n_replicas, simulations_dir, mode=mode)
+    if pairs:
+        print(f"Prebuilt pairs  : {pairs}")
 
-    elif args.command == "submit":
-        submit_all(inhibitors, mutants, n_replicas, simulations_dir, mode=mode)
+    for inhs, muts in groups:
+        if args.command == "setup":
+            setup_all(
+                inhs, muts, n_replicas,
+                sim, slurm,
+                protein_dir, ligands_lib_dir, simulations_dir,
+                mode=mode, force=args.force,
+                disulfides=disulfides,
+            )
+            if args.submit:
+                submit_all(inhs, muts, n_replicas, simulations_dir, mode=mode)
 
-    elif args.command == "check":
-        from .check import check_all
-        check_all(
-            inhibitors, mutants, n_replicas,
-            sim, simulations_dir,
-            verbose=args.verbose,
-            only_failed=args.failed,
-        )
+        elif args.command == "submit":
+            submit_all(inhs, muts, n_replicas, simulations_dir, mode=mode)
 
-    elif args.command == "topology_info":
-        from .topology import topology_info
-        topology_info(inhibitors, mutants, simulations_dir)
+        elif args.command == "check":
+            from .check import check_all
+            check_all(
+                inhs, muts, n_replicas,
+                sim, simulations_dir,
+                verbose=args.verbose,
+                only_failed=args.failed,
+            )
+
+        elif args.command == "topology_info":
+            from .topology import topology_info
+            topology_info(inhs, muts, simulations_dir)

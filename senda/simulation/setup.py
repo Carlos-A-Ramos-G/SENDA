@@ -531,11 +531,13 @@ def _write_run_scripts(
 
     leap_cfg      = sim.get("leap") or {}
     salt_molarity = float(leap_cfg.get("salt_molarity", 0))
-    if salt_molarity:
+    if prebuilt_stem(sim, inh, mut) is not None:
+        leap_block = 'log "00_prep: prebuilt topology (structure.parm7/.rst7 copied at setup, no tleap)"'
+    elif salt_molarity:
         pdb_name   = f"{mut}_{inh}_dimer.pdb"
-        leap_block = fill(SPLIT_LEAP_BLOCK, PDB_NAME=pdb_name, MOLARITY=salt_molarity)
+        leap_block = 'log "00_prep: tleap"\n' + fill(SPLIT_LEAP_BLOCK, PDB_NAME=pdb_name, MOLARITY=salt_molarity)
     else:
-        leap_block = "tleap -f leap_structure"
+        leap_block = 'log "00_prep: tleap"\ntleap -f leap_structure'
 
     max_heat_retries = int((sim.get("heat") or {}).get("max_retries", 5))
     pos_cfg = restr_cfg.get("positional", {}) or {}
@@ -631,6 +633,66 @@ def _write_exe(path: Path, content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Prebuilt topologies (amber_simulator.prebuilt)
+# ---------------------------------------------------------------------------
+
+def prebuilt_pairs(sim: dict) -> dict[str, list[str]]:
+    """
+    {inhibitor: [mutant, ...]} listed under amber_simulator.prebuilt.
+
+      amber_simulator:
+        prebuilt:
+          L02: {S1: path/to/4H4E_S1_solv, S2: path/to/4H4E_S2_solv}
+
+    Each value is a file stem: <stem>.prmtop, <stem>.inpcrd and <stem>.pdb must
+    exist. Only the listed pairs are set up (no inhibitor x mutant product), and
+    00_prep copies these files instead of running tleap -- for systems whose
+    topology tleap cannot be told to build from SENDA's template (e.g. metal
+    clusters with covalent bonds to the protein).
+    """
+    raw = sim.get("prebuilt") or {}
+    if not isinstance(raw, dict):
+        raise ValueError("amber_simulator.prebuilt must be a dict {inhibitor: {mutant: stem}}")
+    return {inh: list(muts or {}) for inh, muts in raw.items()}
+
+
+def prebuilt_stem(sim: dict, inh: str, mut: str) -> Path | None:
+    stem = ((sim.get("prebuilt") or {}).get(inh) or {}).get(mut)
+    return Path(stem).expanduser() if stem else None
+
+
+def _parm7_natom(path: Path) -> int:
+    lines = path.read_text().splitlines()
+    i = next(k for k, l in enumerate(lines) if l.startswith("%FLAG POINTERS"))
+    return int(lines[i + 2].split()[0])
+
+
+def _rst7_natom(path: Path) -> int:
+    with open(path) as fh:
+        fh.readline()
+        return int(fh.readline().split()[0])
+
+
+def _copy_prebuilt(stem: Path, prep_dir: Path, inh: str, mut: str) -> Path:
+    """Copy <stem>.prmtop/.inpcrd/.pdb into 00_prep under SENDA's names; return the PDB."""
+    src = {ext: Path(f"{stem}{ext}") for ext in (".prmtop", ".inpcrd", ".pdb")}
+    missing = [str(p) for p in src.values() if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"prebuilt files for {inh}/{mut} not found: {missing}")
+    n_top, n_crd = _parm7_natom(src[".prmtop"]), _rst7_natom(src[".inpcrd"])
+    if n_top != n_crd:
+        raise ValueError(
+            f"prebuilt {inh}/{mut}: {src['.prmtop'].name} has {n_top} atoms but "
+            f"{src['.inpcrd'].name} has {n_crd}"
+        )
+    shutil.copy(src[".prmtop"], prep_dir / "structure.parm7")
+    shutil.copy(src[".inpcrd"], prep_dir / "structure.rst7")
+    pdb = prep_dir / f"{mut}_{inh}_dimer.pdb"
+    shutil.copy(src[".pdb"], pdb)
+    return pdb
+
+
+# ---------------------------------------------------------------------------
 # Per-replica setup
 # ---------------------------------------------------------------------------
 
@@ -650,17 +712,23 @@ def setup_replica(
     for d in _SUBDIRS:
         (replica_dir / d).mkdir(parents=True, exist_ok=True)
 
-    # PDB -copy directly from protein/ (already clean from senda-complex)
-    src_pdb = protein_dir / f"{mut}_{inh}_dimer.pdb"
-    if not src_pdb.exists():
-        raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
-    shutil.copy(src_pdb, replica_dir / "00_prep" / src_pdb.name)
+    stem = prebuilt_stem(sim, inh, mut)
+    if stem is not None:
+        # Validated topology built elsewhere: copied as is, no tleap
+        src_pdb = _copy_prebuilt(stem, replica_dir / "00_prep", inh, mut)
+    else:
+        # PDB -copy directly from protein/ (already clean from senda-complex)
+        src_pdb = protein_dir / f"{mut}_{inh}_dimer.pdb"
+        if not src_pdb.exists():
+            raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
+        shutil.copy(src_pdb, replica_dir / "00_prep" / src_pdb.name)
 
-    disulfide_bonds = _resolve_disulfide_bonds(disulfides or [], src_pdb)
+    disulfide_bonds = (_resolve_disulfide_bonds(disulfides or [], src_pdb)
+                       if stem is None else [])
 
-    # Ligand FF parameters (not needed for APO)
+    # Ligand FF parameters (not needed for APO or prebuilt topologies)
     has_ligand = (inh != "APO")
-    if has_ligand:
+    if has_ligand and stem is None:
         for ext in (".lib", ".frcmod"):
             src = ligands_lib_dir / inh / f"{inh}{ext}"
             if not src.exists():
@@ -672,7 +740,7 @@ def setup_replica(
 
     # Extra lib/frcmod files (cofactors, modified residues, etc.)
     leap_cfg = sim.get("leap") or {}
-    for path_str in leap_cfg.get("extra_libs", []):
+    for path_str in (leap_cfg.get("extra_libs", []) if stem is None else []):
         src = Path(path_str)
         if not src.exists():
             raise FileNotFoundError(f"Extra lib/frcmod not found: {src}")
@@ -680,7 +748,9 @@ def setup_replica(
 
     # tleap input
     salt_molarity = float(leap_cfg.get("salt_molarity", 0))
-    if salt_molarity:
+    if stem is not None:
+        pass
+    elif salt_molarity:
         (replica_dir / "00_prep" / "leap_count").write_text(
             _render_leap_count(inh, mut, has_ligand, leap_cfg)
         )
