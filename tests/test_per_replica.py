@@ -39,6 +39,6 @@ def test_pdb_parser_blank_chain_and_hybrid36_waters(tmp_path):
     pdb = tmp_path / "x.pdb"
     pdb.write_text(
         "ATOM      1  N   MET     1     -30.943   9.366   2.272  1.00  0.00           N\n"
-        "HETATM    2 FE1  F4C   310       0.000   0.000   0.000  1.00  0.00          FE\n"
+        "HETATM    2 FE1  COF   310       0.000   0.000   0.000  1.00  0.00          FE\n"
         "ATOM      3  O   WAT A000       1.000   0.000   0.000  1.00  0.00           O\n")
-    assert _parse_pdb_residues(pdb) == [("A", 1, "MET"), ("A", 310, "F4C")]
+    assert _parse_pdb_residues(pdb) == [("A", 1, "MET"), ("A", 310, "COF")]

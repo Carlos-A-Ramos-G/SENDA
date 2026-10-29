@@ -284,8 +284,8 @@ When a system cannot be built from SENDA's tleap template (for example a metal c
 ```yaml
 amber_simulator:
   prebuilt:
-    L02: {S1: /path/to/4H4E_S1_solv, S2: /path/to/4H4E_S2_solv}
-    L03: {S1p: /path/to/4H4E_S1p_solv}
+    INH1: {WT: /path/to/WT_INH1_solv, MUT1: /path/to/MUT1_INH1_solv}
+    INH2: {WT: /path/to/WT_INH2_solv}
 ```
 
 - Only the listed (inhibitor, mutant) pairs are set up, not every inhibitor × mutant combination. `inhibitors:` can still narrow the selection, and `mutants:` may be left empty.

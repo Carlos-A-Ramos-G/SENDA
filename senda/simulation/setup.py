@@ -644,7 +644,7 @@ def prebuilt_pairs(sim: dict) -> dict[str, list[str]]:
 
       amber_simulator:
         prebuilt:
-          L02: {S1: path/to/4H4E_S1_solv, S2: path/to/4H4E_S2_solv}
+          INH1: {WT: path/to/WT_INH1_solv, MUT1: path/to/MUT1_INH1_solv}
 
     Each value is a file stem: <stem>.prmtop, <stem>.inpcrd and <stem>.pdb must
     exist. Only the listed pairs are set up (no inhibitor x mutant product), and

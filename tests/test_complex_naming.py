@@ -18,18 +18,18 @@ def _pdb(path, chains, ligand_chain=None):
 
 
 def test_complex_pdb_name():
-    assert complex_pdb_name("WT", "L01") == "WT_L01_complex.pdb"
+    assert complex_pdb_name("WT", "INH1") == "WT_INH1_complex.pdb"
 
 
 def test_find_prefers_current_name_then_legacy(tmp_path):
     a, b = tmp_path / "prep", tmp_path / "protein"
     a.mkdir(); b.mkdir()
-    (b / "WT_L01_dimer.pdb").write_text("END\n")
-    assert find_complex_pdb([a, b], "WT", "L01") == b / "WT_L01_dimer.pdb"
-    (b / "WT_L01_complex.pdb").write_text("END\n")
-    assert find_complex_pdb([a, b], "WT", "L01") == b / "WT_L01_complex.pdb"
-    with pytest.raises(FileNotFoundError, match="WT_L02_complex.pdb"):
-        find_complex_pdb([a, b], "WT", "L02")
+    (b / "WT_INH1_dimer.pdb").write_text("END\n")
+    assert find_complex_pdb([a, b], "WT", "INH1") == b / "WT_INH1_dimer.pdb"
+    (b / "WT_INH1_complex.pdb").write_text("END\n")
+    assert find_complex_pdb([a, b], "WT", "INH1") == b / "WT_INH1_complex.pdb"
+    with pytest.raises(FileNotFoundError, match="WT_INH2_complex.pdb"):
+        find_complex_pdb([a, b], "WT", "INH2")
 
 
 @pytest.mark.parametrize("chains, expected", [
@@ -54,10 +54,10 @@ def test_config_chains_win(tmp_path):
 
 
 def test_system_chains_reads_the_replica_pdb(tmp_path):
-    prep = tmp_path / "simulations" / "L01" / "WT" / "replica_1" / "00_prep"
+    prep = tmp_path / "simulations" / "INH1" / "WT" / "replica_1" / "00_prep"
     prep.mkdir(parents=True)
-    _pdb(prep / "WT_L01_dimer.pdb", " ")              # legacy name, monomer
-    assert system_chains({}, tmp_path, "L01", "WT") == ["A"]
-    _pdb(prep / "WT_L01_complex.pdb", "AB")
-    assert system_chains({}, tmp_path, "L01", "WT") == ["A", "B"]
-    assert system_chains({}, tmp_path, "L02", "WT") == ["A"]   # nothing found
+    _pdb(prep / "WT_INH1_dimer.pdb", " ")              # legacy name, monomer
+    assert system_chains({}, tmp_path, "INH1", "WT") == ["A"]
+    _pdb(prep / "WT_INH1_complex.pdb", "AB")
+    assert system_chains({}, tmp_path, "INH1", "WT") == ["A", "B"]
+    assert system_chains({}, tmp_path, "INH2", "WT") == ["A"]   # nothing found

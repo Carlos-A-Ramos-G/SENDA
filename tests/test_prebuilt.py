@@ -29,23 +29,23 @@ def _prebuilt(tmp_path, name, natom=3, ncrd=None):
 
 
 def _sim(tmp_path, **extra):
-    return {**SIM, "prebuilt": {"L02": {"S1": _prebuilt(tmp_path, "4H4E_S1_solv")},
-                                "L03": {"S1p": _prebuilt(tmp_path, "4H4E_S1p_solv")}}, **extra}
+    return {**SIM, "prebuilt": {"INH1": {"WT": _prebuilt(tmp_path, "WT_INH1_solv")},
+                                "INH2": {"MUT1": _prebuilt(tmp_path, "MUT1_INH2_solv")}}, **extra}
 
 
 def test_prebuilt_pairs_lists_only_configured_pairs(tmp_path):
-    assert prebuilt_pairs(_sim(tmp_path)) == {"L02": ["S1"], "L03": ["S1p"]}
+    assert prebuilt_pairs(_sim(tmp_path)) == {"INH1": ["WT"], "INH2": ["MUT1"]}
     assert prebuilt_pairs(SIM) == {}
 
 
 @pytest.mark.parametrize("engine", ["amber", "openmm"])
 def test_prebuilt_copies_topology_and_skips_tleap(tmp_path, engine):
     sim = _sim(tmp_path, engine=engine)
-    setup_all(["L02"], ["S1"], 1, sim, SLURM, tmp_path / "protein",
+    setup_all(["INH1"], ["WT"], 1, sim, SLURM, tmp_path / "protein",
               tmp_path / "ligands_libraries", tmp_path / "simulations", mode="cluster")
-    prep = tmp_path / "simulations" / "L02" / "S1" / "replica_1" / "00_prep"
+    prep = tmp_path / "simulations" / "INH1" / "WT" / "replica_1" / "00_prep"
     assert sorted(p.name for p in prep.iterdir() if p.suffix in (".parm7", ".rst7", ".pdb")) == \
-        ["S1_L02_complex.pdb", "structure.parm7", "structure.rst7"]
+        ["WT_INH1_complex.pdb", "structure.parm7", "structure.rst7"]
     assert not (prep / "leap_structure").exists()
     assert not any(prep.glob("*.lib")) and not any(prep.glob("*.frcmod"))
     run = (prep.parent / "run_gpu").read_text()
@@ -54,14 +54,14 @@ def test_prebuilt_copies_topology_and_skips_tleap(tmp_path, engine):
 
 
 def test_prebuilt_atom_count_mismatch_fails(tmp_path):
-    sim = {**SIM, "prebuilt": {"L02": {"S1": _prebuilt(tmp_path, "bad", natom=3, ncrd=4)}}}
+    sim = {**SIM, "prebuilt": {"INH1": {"WT": _prebuilt(tmp_path, "bad", natom=3, ncrd=4)}}}
     with pytest.raises(ValueError, match="3 atoms"):
-        setup_all(["L02"], ["S1"], 1, sim, SLURM, tmp_path / "protein",
+        setup_all(["INH1"], ["WT"], 1, sim, SLURM, tmp_path / "protein",
                   tmp_path / "ligands_libraries", tmp_path / "simulations")
 
 
 def test_prebuilt_missing_file_fails(tmp_path):
-    sim = {**SIM, "prebuilt": {"L02": {"S1": str(tmp_path / "nowhere")}}}
-    with pytest.raises(FileNotFoundError, match="L02/S1"):
-        setup_all(["L02"], ["S1"], 1, sim, SLURM, tmp_path / "protein",
+    sim = {**SIM, "prebuilt": {"INH1": {"WT": str(tmp_path / "nowhere")}}}
+    with pytest.raises(FileNotFoundError, match="INH1/WT"):
+        setup_all(["INH1"], ["WT"], 1, sim, SLURM, tmp_path / "protein",
                   tmp_path / "ligands_libraries", tmp_path / "simulations")
