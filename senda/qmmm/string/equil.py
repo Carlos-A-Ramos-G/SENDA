@@ -70,7 +70,9 @@ def setup(
     rep1_dir    = sim_base / "replica_1"
     mc_cfg      = cfg.get("michaelis_complex") or {}
     protein_dir = cwd / mc_cfg.get("output_dir", "protein")
-    chains      = mc_cfg.get("chains") or ["A"]
+    from senda.config import system_chains
+
+    chains      = system_chains(cfg, cwd, inh, mut)
     chain       = chain or chains[0]
     tag         = chain_tag(chain, chains)
 

@@ -8,8 +8,8 @@ For each raw crystal-structure PDB:
                    apply protonation states from reference structure
   2. align()     — Cα superposition onto the alignment reference; apply transform
   3. write output files:
-       {mutant}_{inhibitor}_dimer.pdb  — one per inhibitor in inhibitor_sources
-       {mutant}_APO_dimer.pdb          — protein only (always written)
+       {mutant}_{inhibitor}_complex.pdb  — one per inhibitor in inhibitor_sources
+       {mutant}_APO_complex.pdb          — protein only (always written)
 
 Inhibitor coordinates come from two sources, configured per inhibitor:
   "native"          — the ligand is already present in the raw PDB (after
@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+
+from senda.config import complex_pdb_name
 
 from .clean  import clean, build_protonation_map
 from .align  import compute_superposition, apply_transform
@@ -318,11 +320,11 @@ def prepare(
                             mutant, inh_name, chains_present)
 
         _write_pdb(protein_body, ligand_lines,
-                   output_dir / f"{mutant}_{inh_name}_dimer.pdb", chains)
+                   output_dir / complex_pdb_name(mutant, inh_name), chains)
 
     # 5. APO — protein only (only when requested)
     if include_apo:
-        _write_pdb(protein_body, [], output_dir / f"{mutant}_APO_dimer.pdb", chains)
+        _write_pdb(protein_body, [], output_dir / complex_pdb_name(mutant, "APO"), chains)
 
 
 # ---------------------------------------------------------------------------
@@ -387,9 +389,9 @@ def prepare_all(
         if not raw_pdb.exists():
             raise FileNotFoundError(f"Raw PDB not found: {raw_pdb}")
 
-        outputs = [output_dir / f"{mutant}_{n}_dimer.pdb" for n in inh_names]
+        outputs = [output_dir / complex_pdb_name(mutant, n) for n in inh_names]
         if include_apo:
-            outputs.append(output_dir / f"{mutant}_APO_dimer.pdb")
+            outputs.append(output_dir / complex_pdb_name(mutant, "APO"))
         if not force and all(p.exists() for p in outputs):
             log.info("[%s] already done — skipping (use --force to redo)", mutant)
             print(f"[{mutant}] already done — skipping (use --force to redo)")

@@ -45,7 +45,7 @@ def test_prebuilt_copies_topology_and_skips_tleap(tmp_path, engine):
               tmp_path / "ligands_libraries", tmp_path / "simulations", mode="cluster")
     prep = tmp_path / "simulations" / "L02" / "S1" / "replica_1" / "00_prep"
     assert sorted(p.name for p in prep.iterdir() if p.suffix in (".parm7", ".rst7", ".pdb")) == \
-        ["S1_L02_dimer.pdb", "structure.parm7", "structure.rst7"]
+        ["S1_L02_complex.pdb", "structure.parm7", "structure.rst7"]
     assert not (prep / "leap_structure").exists()
     assert not any(prep.glob("*.lib")) and not any(prep.glob("*.frcmod"))
     run = (prep.parent / "run_gpu").read_text()

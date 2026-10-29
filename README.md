@@ -38,7 +38,7 @@ conda install -c conda-forge rdkit
 ## Workflow overview
 
 ```
-raw crystal PDBs  ->  senda-complex  ->  curated protein-ligand dimers
+raw crystal PDBs  ->  senda-complex  ->  curated protein-ligand complexes
                                                   |
 ligand PDBs       ->  senda-param   ->  GAFF parameters
                                                   |
@@ -66,7 +66,7 @@ On an HPC cluster, use `senda-slurm` to chain all jobs automatically.
 | Command | What it does |
 |---|---|
 | `senda-param` | Parameterize ligands with GAFF2 (AM1-BCC or RESP charges) |
-| `senda-complex` | Prepare curated protein-ligand dimer PDBs from raw crystal structures |
+| `senda-complex` | Prepare curated protein-ligand complex PDBs (any number of chains) from raw crystal structures |
 | `senda-sim` | Generate AMBER MD replica directories, submit jobs, check run status, or inspect topology |
 | `senda-slurm` | Generate a chained SLURM workflow script for the full pipeline |
 | `senda-analyse` | Analyse reactive distances from NVT trajectories and select a representative frame for QM/MM |
@@ -132,7 +132,7 @@ ligands_libraries/
 
 ## Michaelis complex preparation -- `senda-complex`
 
-Converts raw crystallographic PDB files into curated protein-ligand dimer PDBs ready for AMBER MD.
+Converts raw crystallographic PDB files into curated protein-ligand complex PDBs ready for AMBER MD. Monomers and multimers are handled the same way: the chains come from `michaelis_complex.chains`, or, if that is not set, every protein chain of the alignment reference.
 
 ### Config blocks read
 
@@ -154,8 +154,10 @@ For each structure in `michaelis_complex.structures` whose mutant name appears i
 2. **Align** -- superimposes the cleaned structure onto the alignment reference by Ca RMSD (Kabsch). ANISOU records are carried through.
 3. **Fill missing residues** -- residues present in the alignment reference but absent in the raw PDB are copied from the reference (valid because the structure has already been superimposed).
 4. **Write output PDBs** -- one per inhibitor listed in `inhibitor_sources`, plus an APO (protein-only) file:
-   - `{mutant}_{inhibitor}_dimer.pdb` -- protein + ligand
-   - `{mutant}_APO_dimer.pdb` -- protein only
+   - `{mutant}_{inhibitor}_complex.pdb` -- protein + ligand
+   - `{mutant}_APO_complex.pdb` -- protein only
+
+   Projects set up before 2026-10-29 used `_dimer.pdb` for every system; every SENDA command still finds those files.
 
 Ligand coordinates come from either the raw PDB itself (`native`) or a reference PDB you supply.
 
@@ -170,8 +172,8 @@ your_project/
 |   +-- wildtype.pdb
 |   +-- mutant1.pdb
 +-- protein/
-    +-- WT_LER_dimer.pdb      # alignment reference -- must exist beforehand
-    +-- WT_NIR_dimer.pdb      # NIR coordinate source (if NIR is not native)
+    +-- WT_LER_complex.pdb    # alignment reference -- must exist beforehand
+    +-- WT_NIR_complex.pdb    # NIR coordinate source (if NIR is not native)
 ```
 
 ### Run
@@ -287,7 +289,7 @@ amber_simulator:
 ```
 
 - Only the listed (inhibitor, mutant) pairs are set up, not every inhibitor × mutant combination. `inhibitors:` can still narrow the selection, and `mutants:` may be left empty.
-- `00_prep` receives `structure.parm7`, `structure.rst7` and `{mutant}_{inhibitor}_dimer.pdb`.
+- `00_prep` receives `structure.parm7`, `structure.rst7` and `{mutant}_{inhibitor}_complex.pdb`.
 - Ligand libraries, `extra_libs` and tleap are skipped. HMR, the positional-restraint mask and the NMR restrainer run as usual.
 - Setup stops if a file is missing or if the prmtop and inpcrd atom counts differ.
 
@@ -395,7 +397,7 @@ For each inhibitor/mutant combination:
 
 ### Outputs
 
-One set of files per chain (A, B, ... from `michaelis_complex.chains`):
+One set of files per chain (`michaelis_complex.chains`, or every protein chain of the complex PDB if not set):
 
 ```
 simulations/{inhibitor}/{mutant}/
@@ -440,12 +442,12 @@ Each atom in `reactive_distances` and `water_rdf.center_atoms` uses one of two f
 
 | Field | When to use | Value |
 |---|---|---|
-| `sequence` | Protein / binding-site residues | PDB residue number as it appears in the dimer PDB (same in every monomer) |
+| `sequence` | Protein / binding-site residues | PDB residue number as it appears in the complex PDB (same in every chain) |
 | `substrate_sequence` | Ligand or substrate residues | 1-based AMBER residue number of the substrate in `chains[0]`, as assigned in the parm7 topology |
 
-For `sequence` atoms the equivalent residue in every other monomer is looked up directly from `chain_map[(chain, pdb_resnum)]`. This works as long as protein chains share PDB residue numbers, which is standard for homodimers and homo-oligomers.
+For `sequence` atoms the equivalent residue in every other chain is looked up directly from `chain_map[(chain, pdb_resnum)]`. This works as long as protein chains share PDB residue numbers, which is standard for homo-oligomers. A monomer has a single chain and needs no lookup.
 
-For `substrate_sequence` atoms the equivalent residue in every other monomer is determined by **geometric proximity**: the candidate non-solvent residue whose atoms are closest to the declared `sequence` reference atoms (resolved to that chain) is selected. This is necessary because ligands may share a PDB residue number with a protein residue (making direct lookup ambiguous) and because a peptide substrate uses standard amino-acid names that cannot be distinguished by name alone.
+For `substrate_sequence` atoms the equivalent residue in every other chain is determined by **geometric proximity**: the candidate non-solvent residue whose atoms are closest to the declared `sequence` reference atoms (resolved to that chain) is selected. This is necessary because ligands may share a PDB residue number with a protein residue (making direct lookup ambiguous) and because a peptide substrate uses standard amino-acid names that cannot be distinguished by name alone.
 
 To find the correct AMBER resid for your ligand/substrate in `chains[0]`, inspect the parm7 topology with `parmed` or `pytraj`.
 
@@ -533,7 +535,7 @@ senda-qmmm --config config.yaml string -s --after <scan_jobid>
 # Process only one inhibitor / mutant
 senda-qmmm --config config.yaml equil -i LER -m WT
 
-# Build the QM/MM system from a different monomer of the dimer
+# Build the QM/MM system from a different chain of a multimer
 senda-qmmm --config config.yaml equil -i LER -m WT -c B
 senda-qmmm --config config.yaml scan  -i LER -m WT -c B   # scan/string/prod need the same -c equil used
 ```
@@ -542,7 +544,7 @@ senda-qmmm --config config.yaml scan  -i LER -m WT -c B   # scan/string/prod nee
 
 Without `-i`/`-m`: processes every inhibitor under `qmmm.string.inhibitors` that's also present in the top-level `inhibitors:` list (or all of them if that list is empty), and every mutant from the per-inhibitor or top-level `mutants:` list. `-i`/`-m` each explicitly select one inhibitor/mutant, bypassing those filters entirely -- even for a pair not listed anywhere else in the config.
 
-Without `-c`: builds the QM/MM system from `michaelis_complex.chains[0]` (e.g. `"A"`), writing to the same paths every prior run used. `-c CHAIN` selects a different chain (e.g. `"B"`) to run the identical CV/restraint/QM-region config against that monomer instead -- its cached artifacts and stage directories are suffixed `_chain{CHAIN}` so they don't overwrite the default chain's output (see Outputs below). `scan`/`prod`/`string` must be given the same `-c` value `equil` was run with, since they read back that chain's cached metadata.
+Without `-c`: builds the QM/MM system from `michaelis_complex.chains[0]` (e.g. `"A"`), writing to the same paths every prior run used. `-c CHAIN` selects a different chain (e.g. `"B"`) to run the identical CV/restraint/QM-region config against that chain instead -- its cached artifacts and stage directories are suffixed `_chain{CHAIN}` so they don't overwrite the default chain's output (see Outputs below). `scan`/`prod`/`string` must be given the same `-c` value `equil` was run with, since they read back that chain's cached metadata.
 
 ### Outputs
 
@@ -727,7 +729,7 @@ ligand_parameters:
 michaelis_complex:
   raw_pdbs_dir: raw_pdbs/
   output_dir: protein/
-  chains: [A, B]
+  chains: [A, B]          # optional; default: every protein chain of the alignment reference
 
   # Rename residues before any other processing (e.g. numeric ligand codes).
   residue_renames:
@@ -735,19 +737,19 @@ michaelis_complex:
       to: LER
 
   # PDB used for Ca superposition and missing-residue filling.
-  alignment_reference: protein/WT_LER_dimer.pdb
+  alignment_reference: protein/WT_LER_complex.pdb
 
   # PDB from which protonation states are read.
   # Can be holo -- ligands and water are ignored automatically.
   # Defaults to alignment_reference if omitted.
-  reference_enzyme_pdb: protein/WT_LER_dimer.pdb
+  reference_enzyme_pdb: protein/WT_LER_complex.pdb
 
   # Ligand coordinate sources.
   #   native          -> already present in the raw PDB (after residue_renames)
   #   path/to/ref.pdb -> coordinates copied from this reference PDB
   inhibitor_sources:
     LER: native
-    NIR: protein/WT_NIR_dimer.pdb
+    NIR: protein/WT_NIR_complex.pdb
 
   # Map raw PDB filename -> mutant name used in output file names.
   structures:
@@ -802,8 +804,8 @@ amber_simulator:
     # atoms: list of {residue: <resname>, name: <atomname>}
     # 2 atoms = distance, 3 = angle, 4 = dihedral
     # If {residue, name} matches more than one residue instance (e.g. two
-    # copies of the same ligand in a dimer), disambiguate with chain: <letter>
-    # -- matches the PDB chain column of the dimer PDB fed to tleap (e.g.
+    # copies of the same ligand in a multimer), disambiguate with chain: <letter>
+    # -- matches the PDB chain column of the complex PDB fed to tleap (e.g.
     # chain: B). Falls back to index: <n> (0-based occurrence position in
     # topology order) for the rare case of multiple same-resname copies
     # within the same chain.
@@ -828,12 +830,13 @@ analysis:
   # Reactive distances are declared per inhibitor so each ligand can track
   # its own reactive atoms independently.
   #
-  # sequence:           PDB residue number as it appears in the dimer PDB.
-  #                     Same in every monomer; used for protein residues.
+  # sequence:           PDB residue number as it appears in the complex PDB.
+  #                     Same in every chain; used for protein residues.
   # substrate_sequence: AMBER residue number of the substrate in chains[0],
   #                     as assigned in the parm7 topology (check with parmed/pytraj).
-  #                     Equivalent residues in other monomers are found by geometric proximity.
-  # The analysis runs automatically for every chain in michaelis_complex.chains.
+  #                     Equivalent residues in other chains are found by geometric proximity.
+  # The analysis runs automatically for every chain in michaelis_complex.chains
+  # (or, if not set, every protein chain of the complex PDB).
 
   LER:
     reactive_distances:

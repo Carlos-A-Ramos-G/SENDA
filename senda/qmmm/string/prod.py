@@ -39,7 +39,9 @@ def setup(
     chain: which michaelis_complex.chains entry stage 05 was built for
     (defaults to chains[0]); must match the chain equil was run with.
     """
-    chains   = (cfg.get("michaelis_complex") or {}).get("chains") or ["A"]
+    from senda.config import system_chains
+
+    chains   = system_chains(cfg, cwd, inh, mut)
     chain    = chain or chains[0]
     tag      = chain_tag(chain, chains)
 

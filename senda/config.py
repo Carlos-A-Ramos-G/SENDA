@@ -85,3 +85,93 @@ def sbatch_lines(section: dict, reserved: "set | None" = None, **extra) -> str:
         if key not in excluded and value not in (None, "")
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Complex PDB naming and chain selection (monomers and multimers alike)
+# ---------------------------------------------------------------------------
+
+# Amino-acid residue names (with AMBER protonation variants): a chain holding
+# any of these is a protein chain. Ligands and cofactors may carry their own
+# chain IDs and are not counted.
+AMINO_ACIDS = frozenset({
+    "ALA", "ARG", "ASN", "ASP", "ASH", "CYS", "CYX", "CYM", "GLN", "GLU",
+    "GLH", "GLY", "HIS", "HID", "HIE", "HIP", "ILE", "LEU", "LYS", "LYN",
+    "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+})
+
+
+def complex_pdb_name(mut: str, inh: str) -> str:
+    """File name of the protein(-ligand) complex PDB written by senda-complex."""
+    return f"{mut}_{inh}_complex.pdb"
+
+
+def legacy_complex_pdb_name(mut: str, inh: str) -> str:
+    """Name used before 2026-10-29 (every system was called a dimer)."""
+    return f"{mut}_{inh}_dimer.pdb"
+
+
+def find_complex_pdb(dirs, mut: str, inh: str) -> "Path":
+    """
+    First existing complex PDB in *dirs* (searched in order): the current
+    {mut}_{inh}_complex.pdb, else the legacy {mut}_{inh}_dimer.pdb, so
+    projects set up before the rename keep working.
+    """
+    from pathlib import Path
+
+    dirs = [Path(d) for d in dirs]
+    for name in (complex_pdb_name(mut, inh), legacy_complex_pdb_name(mut, inh)):
+        for d in dirs:
+            if (d / name).exists():
+                return d / name
+    raise FileNotFoundError(
+        f"Complex PDB {complex_pdb_name(mut, inh)} (or legacy "
+        f"{legacy_complex_pdb_name(mut, inh)}) not found in: "
+        + ", ".join(str(d) for d in dirs)
+    )
+
+
+def protein_chains(pdb_path) -> list:
+    """Chain IDs with amino-acid residues, in file order (blank chain -> 'A')."""
+    chains = []
+    with open(pdb_path) as fh:
+        for line in fh:
+            if not line.startswith(("ATOM  ", "HETATM")):
+                continue
+            if line[17:20].strip() not in AMINO_ACIDS:
+                continue
+            ch = line[21].strip() or "A"
+            if ch not in chains:
+                chains.append(ch)
+    return chains
+
+
+def resolve_chains(cfg: dict, pdb_path=None) -> list:
+    """
+    Chains to work on: michaelis_complex.chains if set, else every protein
+    chain in *pdb_path* (monomer -> [A], tetramer -> [A, B, C, D]), else [A].
+    The first entry is the default chain (no suffix on its output paths).
+    """
+    chains = (cfg.get("michaelis_complex") or {}).get("chains")
+    if chains:
+        return [str(c) for c in chains]
+    if pdb_path is not None:
+        found = protein_chains(pdb_path)
+        if found:
+            return found
+    return ["A"]
+
+
+def system_chains(cfg: dict, cwd, inh: str, mut: str) -> list:
+    """resolve_chains() for one simulated system, reading its complex PDB if needed."""
+    from pathlib import Path
+
+    if (cfg.get("michaelis_complex") or {}).get("chains"):
+        return resolve_chains(cfg)
+    cwd = Path(cwd)
+    protein_dir = cwd / (cfg.get("michaelis_complex") or {}).get("output_dir", "protein")
+    try:
+        pdb = find_complex_pdb([cwd / "simulations" / inh / mut / "replica_1" / "00_prep", protein_dir], mut, inh)
+    except FileNotFoundError:
+        pdb = None
+    return resolve_chains(cfg, pdb)

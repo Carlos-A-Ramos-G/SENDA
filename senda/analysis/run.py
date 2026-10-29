@@ -60,7 +60,6 @@ def main() -> None:
     cwd        = Path.cwd()
 
     mc_cfg      = cfg.get("michaelis_complex") or {}
-    chains      = mc_cfg.get("chains") or ["A"]
     protein_dir = cwd / mc_cfg.get("output_dir", "protein")
 
     # amber_simulator.prebuilt lists the (inhibitor, mutant) pairs that exist
@@ -89,6 +88,8 @@ def main() -> None:
     sys.stdout = _Tee(original_stdout, log_file)
 
     try:
+        from senda.config import system_chains
+
         from .distances import analyse
 
         for inh in inhibitors:
@@ -111,6 +112,7 @@ def main() -> None:
             for mut in (prebuilt.get(inh, []) if prebuilt else mutants):
                 print(f"\n=== {inh} / {mut} ===")
                 try:
+                    chains = system_chains(cfg, cwd, inh, mut)
                     analyse(inh, mut, dist_specs, rdf_specs, n_replicas, chains, protein_dir, cwd,
                             exclude_water=exclude_water,
                             exclude_water_neighbor=exclude_water_neighbor,

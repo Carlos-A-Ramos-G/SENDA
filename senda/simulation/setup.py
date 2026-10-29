@@ -17,7 +17,9 @@ Directory layout produced:
   openmm_params.json in the replica root (read by senda-omm on the compute
   node) plus 00_prep/restraint_mask.cpptraj; 00_prep is otherwise identical.
 
-Protein PDBs are read from {protein_dir}/{mutant}_{inhibitor}_dimer.pdb.
+Protein PDBs are read from {protein_dir}/{mutant}_{inhibitor}_complex.pdb (legacy
+{mutant}_{inhibitor}_dimer.pdb still accepted) and copied to 00_prep under the
+current name.
 Ligand FF parameters are read from {ligands_lib_dir}/{inhibitor}/{inhibitor}.lib
 and .frcmod.  APO systems have no ligand parameters.
 
@@ -60,7 +62,7 @@ from .templates import (
     fill,
 )
 from senda.analysis.distances import _parse_pdb_residues
-from senda.config import sbatch_lines
+from senda.config import complex_pdb_name, find_complex_pdb, sbatch_lines
 from senda.michaelis_complex.clean import _chain, _coords, _resname, _resnum
 
 _DISULFIDE_DISTANCE_LIMIT = 3.5  # Angstrom -- hard error above this
@@ -134,7 +136,7 @@ def _render_leap(inh: str, mut: str, has_ligand: bool, leap_cfg: dict,
         elif fname.endswith(".frcmod"):
             lines.append(f"loadamberparams {fname}")
 
-    lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
+    lines.append(f"structure = loadpdb {complex_pdb_name(mut, inh)}")
     lines.extend(disulfide_bonds or [])
 
     if split:
@@ -176,7 +178,7 @@ def _render_leap_count(inh: str, mut: str, has_ligand: bool, leap_cfg: dict) -> 
         elif fname.endswith(".frcmod"):
             lines.append(f"loadamberparams {fname}")
 
-    lines.append(f"structure = loadpdb {mut}_{inh}_dimer.pdb")
+    lines.append(f"structure = loadpdb {complex_pdb_name(mut, inh)}")
     lines.append("charge structure")
     lines.append(f"solvatebox structure {box_type} {box_size}")
     lines.append("quit")
@@ -221,7 +223,7 @@ def _resolve_nmr_chain_specs(nmr_list: list, pdb_path: Path) -> list:
     'index' (0-based position among matching-resname residues, in topology
     order) is what _atom_indices in templates.py actually consumes at job
     runtime -- since tleap preserves residue order, that position matches the
-    dimer PDB's own residue order, so 'chain' can be resolved to it here
+    complex PDB's own residue order, so 'chain' can be resolved to it here
     using only the PDB, before the topology exists.
     """
     pdb_residues = None  # parsed lazily, only if a spec actually uses 'chain'
@@ -258,7 +260,7 @@ def _resolve_disulfide_bonds(disulfides: list[dict], pdb_path: Path) -> list[str
     <i>/<j> are 1-based positions in _parse_pdb_residues(pdb_path) order -- the
     same "tleap preserves residue order" assumption _resolve_nmr_chain_specs
     relies on above, since tleap assigns unit residue numbers sequentially in
-    loadpdb file order, and this dimer PDB has no residue coming before a Cys
+    loadpdb file order, and this complex PDB has no residue coming before a Cys
     other than earlier protein residues (ligand/water always come later).
 
     Hard-stops if a configured residue isn't found, if the same residue is
@@ -534,7 +536,7 @@ def _write_run_scripts(
     if prebuilt_stem(sim, inh, mut) is not None:
         leap_block = 'log "00_prep: prebuilt topology (structure.parm7/.rst7 copied at setup, no tleap)"'
     elif salt_molarity:
-        pdb_name   = f"{mut}_{inh}_dimer.pdb"
+        pdb_name   = complex_pdb_name(mut, inh)
         leap_block = 'log "00_prep: tleap"\n' + fill(SPLIT_LEAP_BLOCK, PDB_NAME=pdb_name, MOLARITY=salt_molarity)
     else:
         leap_block = 'log "00_prep: tleap"\ntleap -f leap_structure'
@@ -687,7 +689,7 @@ def _copy_prebuilt(stem: Path, prep_dir: Path, inh: str, mut: str) -> Path:
         )
     shutil.copy(src[".prmtop"], prep_dir / "structure.parm7")
     shutil.copy(src[".inpcrd"], prep_dir / "structure.rst7")
-    pdb = prep_dir / f"{mut}_{inh}_dimer.pdb"
+    pdb = prep_dir / complex_pdb_name(mut, inh)
     shutil.copy(src[".pdb"], pdb)
     return pdb
 
@@ -718,10 +720,8 @@ def setup_replica(
         src_pdb = _copy_prebuilt(stem, replica_dir / "00_prep", inh, mut)
     else:
         # PDB -copy directly from protein/ (already clean from senda-complex)
-        src_pdb = protein_dir / f"{mut}_{inh}_dimer.pdb"
-        if not src_pdb.exists():
-            raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
-        shutil.copy(src_pdb, replica_dir / "00_prep" / src_pdb.name)
+        src_pdb = find_complex_pdb([protein_dir], mut, inh)
+        shutil.copy(src_pdb, replica_dir / "00_prep" / complex_pdb_name(mut, inh))
 
     disulfide_bonds = (_resolve_disulfide_bonds(disulfides or [], src_pdb)
                        if stem is None else [])

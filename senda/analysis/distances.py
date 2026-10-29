@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-# Residue names added by tleap that do not appear in the input dimer PDB
+# Residue names added by tleap that do not appear in the input complex PDB
 _SOLVENT_RES = frozenset({
     "WAT", "HOH", "Na+", "Cl-", "K+", "Mg2+", "Ca2+",
     "Na", "Cl", "MG", "CA", "ZN", "FE", "SOD", "CLA", "IP",
@@ -38,7 +38,7 @@ def _parse_pdb_residues(pdb_path: Path) -> list:
 def _build_chain_map(pdb_path: Path, top) -> dict:
     """
     Map (chain, pdb_resnum) -> 1-based AMBER residue number by positional
-    matching of the dimer PDB against the parm7 topology.
+    matching of the complex PDB against the parm7 topology.
 
     PDB side: water and ions are excluded via _SOLVENT_RES (residue name filter,
     not record type -- both HOH and ligands are HETATM records).
@@ -109,7 +109,7 @@ def _build_substrate_chain_map(
     """
     For every chain, assign the correct substrate copy by geometric proximity.
 
-    Proximity is used for ALL chains so that PDB chain ordering in the dimer
+    Proximity is used for ALL chains so that PDB chain ordering in the complex PDB
     does not affect which substrate copy is used per chain.  Copies are assigned
     greedily in chain order; each copy is used exactly once.
 
@@ -145,7 +145,7 @@ def _build_substrate_chain_map(
             raise ValueError(
                 f"No reference sequence atoms could be resolved for chain {ch!r}. "
                 f"Specs tried: {sequence_specs}. "
-                f"Check that the PDB residue numbers match entries in the dimer PDB."
+                f"Check that the PDB residue numbers match entries in the complex PDB."
             )
         ref_arr = np.array(ref_list)
 
@@ -204,7 +204,7 @@ def _resolve_atom_index(
         amber_resid = chain_map.get((chain, pdb_resnum))
         if amber_resid is None:
             raise ValueError(
-                f"PDB residue {pdb_resnum} not found for chain {chain!r} in the dimer PDB. "
+                f"PDB residue {pdb_resnum} not found for chain {chain!r} in the complex PDB. "
                 "Check that the sequence number matches the PDB file."
             )
 
@@ -275,15 +275,9 @@ def _find_topology(rep_dir: Path) -> Path:
 
 
 def _find_pdb(rep1_dir: Path, protein_dir: Path, inh: str, mut: str) -> Path:
-    p = rep1_dir / "00_prep" / f"{mut}_{inh}_dimer.pdb"
-    if p.exists():
-        return p
-    p = protein_dir / f"{mut}_{inh}_dimer.pdb"
-    if p.exists():
-        return p
-    raise FileNotFoundError(
-        f"Dimer PDB not found in {rep1_dir / '00_prep'} or {protein_dir}"
-    )
+    from senda.config import find_complex_pdb
+
+    return find_complex_pdb([rep1_dir / "00_prep", protein_dir], mut, inh)
 
 
 # ---------------------------------------------------------------------------

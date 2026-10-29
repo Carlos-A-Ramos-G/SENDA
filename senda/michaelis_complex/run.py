@@ -97,7 +97,12 @@ def main() -> None:
     ref_enzyme_key    = mc.get("reference_enzyme_pdb", mc["alignment_reference"])
     reference_enzyme_pdb = cwd / ref_enzyme_key
 
-    chains = frozenset(str(c) for c in mc.get("chains", ["A", "B"]))
+    # michaelis_complex.chains, else every protein chain of the alignment
+    # reference (monomer -> A; dimer -> A, B; ...)
+    from senda.config import resolve_chains
+    if not mc.get("chains") and not alignment_ref_pdb.exists():
+        sys.exit(f"Error: alignment_reference not found: {alignment_ref_pdb}")
+    chains = frozenset(resolve_chains(raw, alignment_ref_pdb))
 
     if args.report_disulfides:
         from .disulfides import find_disulfide_candidates

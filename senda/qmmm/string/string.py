@@ -44,7 +44,10 @@ def setup(
     """
     import numpy as np
 
-    chains    = (cfg.get("michaelis_complex") or {}).get("chains") or ["A"]
+    from senda.config import system_chains
+
+
+    chains    = system_chains(cfg, cwd, inh, mut)
     chain     = chain or chains[0]
     tag       = chain_tag(chain, chains)
 
