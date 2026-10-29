@@ -35,6 +35,9 @@ def main() -> None:
                         help="Inhibitors to analyse (default: all from config)")
     parser.add_argument("--mutants", nargs="+", metavar="MUT",
                         help="Mutants to analyse (default: all from config)")
+    parser.add_argument("--per-replica", action="store_true",
+                        help="Also write the best frame of each replica "
+                             "({inh}_{mut}_chain{c}_replica{n}_representative.rst7)")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -110,7 +113,8 @@ def main() -> None:
                 try:
                     analyse(inh, mut, dist_specs, rdf_specs, n_replicas, chains, protein_dir, cwd,
                             exclude_water=exclude_water,
-                            exclude_water_neighbor=exclude_water_neighbor)
+                            exclude_water_neighbor=exclude_water_neighbor,
+                            per_replica=args.per_replica)
                 except FileNotFoundError as exc:
                     print(f"  WARNING: {exc} -- skipping")
                 except Exception as exc:

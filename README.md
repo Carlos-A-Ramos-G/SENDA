@@ -391,6 +391,7 @@ For each inhibitor/mutant combination:
 5. Scores every frame by the sum of sigma-normalised distance deviations plus any water penalties
 6. Selects the frame where all distances fall within mode +/- 1 sigma (relaxes to 2 or 3 sigma if needed), preferring frames that also satisfy the water criterion
 7. Writes the selected frame as a restart file, distance distribution plots, and (if configured) RDF plots
+8. With `--per-replica`: also writes the best frame of each replica, scored against the same pooled modes and sigmas but only among that replica's frames (`{inhibitor}_{mutant}_chainA_replica{n}_representative.rst7`). Use these when QM/MM should start from more than one frame per system.
 
 ### Outputs
 
@@ -400,6 +401,7 @@ One set of files per chain (A, B, ... from `michaelis_complex.chains`):
 simulations/{inhibitor}/{mutant}/
 +-- {inhibitor}_{mutant}_chainA_representative.rst7
 +-- {inhibitor}_{mutant}_chainB_representative.rst7
++-- {inhibitor}_{mutant}_chainA_replica{n}_representative.rst7   (only with --per-replica)
 
 Analysis/
 +-- data/

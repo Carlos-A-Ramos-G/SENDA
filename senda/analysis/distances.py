@@ -22,11 +22,12 @@ def _parse_pdb_residues(pdb_path: Path) -> list:
         for line in fh:
             if not line.startswith(("ATOM  ", "HETATM")):
                 continue
-            chain   = line[21]
-            resnum  = int(line[22:26])
+            # solvent first: its resnum may be hybrid-36 (e.g. "A000") past 9999
             resname = line[17:20].strip()
             if resname in _SOLVENT_RES:
                 continue
+            chain   = line[21].strip() or "A"   # single-chain PDBs often leave it blank
+            resnum  = int(line[22:26])
             key = (chain, resnum)
             if key not in seen:
                 seen.add(key)
@@ -355,6 +356,40 @@ def _select_frame(
     return int(np.argmin(scores))
 
 
+def _select_per_replica(
+    pooled:          np.ndarray,
+    modes:           list,
+    stds:            list,
+    frame_lookup:    list,
+    water_penalties: np.ndarray = None,
+) -> dict:
+    """Best frame of each replica: the pooled modes/stds, scored within that replica only.
+
+    Returns {replica: (replica, frame)} with 1-based frame numbers, as frame_lookup.
+    """
+    reps   = np.array([rep for rep, _ in frame_lookup])
+    chosen = {}
+    for rep in sorted(set(reps.tolist())):
+        rows = np.where(reps == rep)[0]
+        pen  = water_penalties[rows] if water_penalties is not None else None
+        chosen[rep] = frame_lookup[rows[_select_frame(pooled[rows], modes, stds, pen)]]
+    return chosen
+
+
+def _write_frame(sim_base: Path, top_path: Path, rep: int, loc: int, rst7_path: Path) -> None:
+    """Write frame loc (1-based) of replica rep's NVT trajectory as an autoimaged rst7."""
+    import pytraj as pt
+
+    nc_files = sorted(glob.glob(str(sim_base / f"replica_{rep}" / "04_NVT" / "structure_NVT_*.nc")))
+    traj     = pt.load(nc_files, top=str(top_path))
+    pt.autoimage(traj)
+    pt.write_traj(str(rst7_path), traj[loc - 1:loc], format="rst7", overwrite=True)
+    # pytraj appends .1 for rst7 format; rename to the plain .rst7 path
+    rst7_numbered = Path(str(rst7_path) + ".1")
+    if rst7_numbered.exists():
+        rst7_numbered.rename(rst7_path)
+
+
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
@@ -438,6 +473,7 @@ def _analyse_chain(
     exclude_water:          "list | None" = None,
     exclude_water_neighbor: "list | dict | None" = None,
     coords:                 "np.ndarray | None" = None,
+    per_replica:            bool = False,
 ) -> None:
     import pytraj as pt
 
@@ -652,18 +688,25 @@ def _analyse_chain(
         print(f"  {label:<24} {pooled[best_row, i]:>10.3f}")
 
     # --- Write rst7 ---
-    nc_files_sel = sorted(glob.glob(
-        str(sim_base / f"replica_{best_rep}" / "04_NVT" / "structure_NVT_*.nc")
-    ))
-    traj_sel  = pt.load(nc_files_sel, top=str(top_path))
-    pt.autoimage(traj_sel)
     rst7_path = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"
-    pt.write_traj(str(rst7_path), traj_sel[best_loc - 1:best_loc], format="rst7", overwrite=True)
-    # pytraj appends .1 for rst7 format; rename to the plain .rst7 path
-    rst7_numbered = Path(str(rst7_path) + ".1")
-    if rst7_numbered.exists():
-        rst7_numbered.rename(rst7_path)
+    _write_frame(sim_base, top_path, best_rep, best_loc, rst7_path)
     print(f"\n  Restart written: {rst7_path}")
+
+    # --- Optional: best frame of each replica (same pooled modes/stds) ---
+    if per_replica:
+        chosen = _select_per_replica(
+            pooled, modes, stds, frame_lookup,
+            water_penalties if resolved_rdf else None,
+        )
+        print(f"\n  Per-replica representatives:")
+        for rep, (_, loc) in chosen.items():
+            row = frame_lookup.index((rep, loc))
+            rep_path = sim_base / f"{inh}_{mut}_chain{chain}_replica{rep}_representative.rst7"
+            _write_frame(sim_base, top_path, rep, loc, rep_path)
+            vals = "  ".join(f"{label}={pooled[row, i]:.2f}" for i, label in enumerate(labels))
+            same = "  (= pooled)" if (rep, loc) == (best_rep, best_loc) else ""
+            print(f"    replica {rep}, frame {loc}: {vals}{same}")
+            print(f"    -> {rep_path}")
 
     # --- Save distances CSV ---
     stem     = f"{inh}_{mut}_chain{chain}_distances"
@@ -701,6 +744,7 @@ def analyse(
     cwd:                    Path,
     exclude_water:          "list | None" = None,
     exclude_water_neighbor: "list | dict | None" = None,
+    per_replica:            bool = False,
 ) -> None:
     try:
         import pytraj as pt
@@ -779,4 +823,5 @@ def analyse(
             exclude_water=exclude_water,
             exclude_water_neighbor=exclude_water_neighbor,
             coords=coords,
+            per_replica=per_replica,
         )
