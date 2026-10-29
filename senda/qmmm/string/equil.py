@@ -99,11 +99,14 @@ def setup(
     top_path = rep1_dir / "00_prep" / "structure.parm7"
     if not top_path.exists():
         raise FileNotFoundError(f"Topology not found: {top_path}")
-    pdb_path    = _find_pdb(rep1_dir, protein_dir, inh, mut)
+    try:
+        pdb_path = _find_pdb(rep1_dir, protein_dir, inh, mut)
+    except FileNotFoundError:
+        pdb_path = None                       # fine if the topology is annotated
     top         = pt.load_topology(str(top_path))
     top_atoms   = list(top.atoms)
     top_residues = list(top.residues)
-    chain_map   = _build_chain_map(pdb_path, top)
+    chain_map   = _build_chain_map(top_path, pdb_path)
 
     # Representative rst7 from senda-analyse output
     rst7_path = sim_base / f"{inh}_{mut}_chain{chain}_representative.rst7"

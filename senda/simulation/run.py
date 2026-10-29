@@ -70,6 +70,10 @@ def main() -> None:
     sub.add_parser("topology_info",
         help="Print atom, box, and ion counts from each system's parm7")
 
+    sub.add_parser("annotate",
+        help="Store PDB chain IDs and residue numbers in every replica's 00_prep "
+             "topology (checked against the complex PDB: count, names, positions)")
+
     args = parser.parse_args()
     cfg  = _load_config(Path(args.config))
     cwd  = Path.cwd()
@@ -148,3 +152,20 @@ def main() -> None:
         elif args.command == "topology_info":
             from .topology import topology_info
             topology_info(inhs, muts, simulations_dir)
+
+        elif args.command == "annotate":
+            from senda.config import find_complex_pdb
+            from .residue_ids import annotate_prep
+            for inh in inhs:
+                for mut in muts:
+                    sim_base = simulations_dir / inh / mut
+                    for rep in range(1, n_replicas + 1):
+                        prep = sim_base / f"replica_{rep}" / "00_prep"
+                        if not (prep / "structure.parm7").exists():
+                            print(f"  {inh}/{mut}/replica_{rep}: no structure.parm7, skipped")
+                            continue
+                        pdb  = find_complex_pdb([prep, protein_dir], mut, inh)
+                        done = annotate_prep(prep, pdb)
+                        print(f"  {inh}/{mut}/replica_{rep}: "
+                              + (", ".join(p.name for p in done) + " annotated" if done
+                                 else "already annotated"))

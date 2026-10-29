@@ -4,6 +4,8 @@ import pytest
 
 from senda.simulation.setup import prebuilt_pairs, setup_all
 
+from amber_files import ala, write_system
+
 SIM = {
     "temperature": 300.0,
     "min": {"maxcyc": 100, "ncyc": 10, "cut": 10.0, "max_cycles_cap": 2,
@@ -17,15 +19,8 @@ SLURM = {"amber_module": "module load amber", "gpu": {}}
 
 
 def _prebuilt(tmp_path, name, natom=3, ncrd=None):
-    """<name>.prmtop/.inpcrd/.pdb with natom atoms (the inpcrd can disagree)."""
-    stem = tmp_path / "builds" / name
-    stem.parent.mkdir(exist_ok=True)
-    pointers = "".join(f"{x:>8}" for x in [natom] + [0] * 9)
-    (stem.parent / f"{name}.prmtop").write_text(
-        f"%VERSION\n%FLAG TITLE\n%FORMAT(20a4)\n\n%FLAG POINTERS\n%FORMAT(10I8)\n{pointers}\n")
-    (stem.parent / f"{name}.inpcrd").write_text(f"default_name\n{ncrd or natom:6d}\n")
-    (stem.parent / f"{name}.pdb").write_text("ATOM      1  N   ALA A   1       0.000   0.000   0.000\nEND\n")
-    return str(stem)
+    """<name>.prmtop/.inpcrd/.pdb: one ALA (3 atoms); the inpcrd can claim a different atom count."""
+    return str(write_system(tmp_path / "builds" / name, [ala(0.0)], ncrd=ncrd))
 
 
 def _sim(tmp_path, **extra):
@@ -51,6 +46,8 @@ def test_prebuilt_copies_topology_and_skips_tleap(tmp_path, engine):
     run = (prep.parent / "run_gpu").read_text()
     assert "tleap" not in run.replace("no tleap", "")
     assert "prebuilt topology" in run and "cpptraj -i HMR.ccptraj" in run
+    from senda.simulation.residue_ids import read_parm7_residues
+    assert read_parm7_residues(prep / "structure.parm7")["ids"] == [("A", 1)]   # IDs stored at setup
 
 
 def test_prebuilt_atom_count_mismatch_fails(tmp_path):

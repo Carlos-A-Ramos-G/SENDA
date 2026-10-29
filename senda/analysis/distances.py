@@ -35,40 +35,36 @@ def _parse_pdb_residues(pdb_path: Path) -> list:
     return residues
 
 
-def _build_chain_map(pdb_path: Path, top) -> dict:
+def _build_chain_map(top_path: Path, pdb_path: "Path | None" = None) -> dict:
     """
-    Map (chain, pdb_resnum) -> 1-based AMBER residue number by positional
-    matching of the complex PDB against the parm7 topology.
+    Map (chain, pdb_resnum) -> 1-based AMBER residue number.
 
-    PDB side: water and ions are excluded via _SOLVENT_RES (residue name filter,
-    not record type -- both HOH and ligands are HETATM records).
+    If the topology carries the residue IDs (%FLAG RESIDUE_NUMBER /
+    RESIDUE_CHAINID, written by `senda-sim annotate` or at prebuilt setup),
+    they are used directly and no PDB is needed. Otherwise the complex PDB is
+    paired with the topology in order and checked (count, names, and positions
+    against structure.rst7 next to the topology; see
+    senda.simulation.residue_ids), without modifying the topology.
 
-    Topology side: instead of a predefined solvent list we keep only residues
-    whose name appears in the filtered PDB set.  This excludes whatever name
-    tleap assigns to water/ions (WAT, HOH, TP3, Na+, ...) without needing to
-    enumerate them.
-
-    Note: when a HETATM residue shares a (chain, resnum) with an ATOM residue
-    (e.g. a ligand given the same resnum as a protein residue), only the first
-    record encountered is kept.  Such ligands will be absent from chain_map;
-    their AMBER resids must be declared explicitly via substrate_sequence.
+    Note: when a ligand shares a (chain, resnum) with a protein residue, the
+    first residue keeps the key; declare such ligands via substrate_sequence.
     """
-    pdb_res      = _parse_pdb_residues(pdb_path)
-    pdb_resnames = {rname for _, _, rname in pdb_res}
+    from senda.simulation.residue_ids import (chain_map_from_ids, match_residues,
+                                              read_parm7_residues)
 
-    amber_res = [(r.index, r.name) for r in top.residues if r.name in pdb_resnames]
-
-    if len(pdb_res) != len(amber_res):
-        raise ValueError(
-            f"Residue count mismatch: PDB has {len(pdb_res)} non-solvent residues, "
-            f"topology has {len(amber_res)} matching residues. "
-            f"Ensure {pdb_path.name} is the exact file fed to tleap."
+    ids = read_parm7_residues(top_path)["ids"]
+    if ids is not None:
+        print(f"  Residue IDs: from {Path(top_path).name}")
+        return chain_map_from_ids(ids)
+    if pdb_path is None:
+        raise FileNotFoundError(
+            f"{top_path} has no residue IDs and no complex PDB was found -- "
+            "run 'senda-sim annotate' or provide the complex PDB"
         )
-
-    return {
-        (chain, resnum): amber_idx + 1
-        for (chain, resnum, _), (amber_idx, _) in zip(pdb_res, amber_res)
-    }
+    ids = match_residues(top_path, pdb_path, Path(top_path).parent / "structure.rst7")
+    print(f"  Residue IDs: matched to {Path(pdb_path).name} (topology not annotated; "
+          "'senda-sim annotate' stores them)")
+    return chain_map_from_ids(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -749,11 +745,14 @@ def analyse(
     rep1_dir = sim_base / "replica_1"
 
     top_path     = _find_topology(rep1_dir)
-    pdb_path     = _find_pdb(rep1_dir, protein_dir, inh, mut)
+    try:
+        pdb_path = _find_pdb(rep1_dir, protein_dir, inh, mut)
+    except FileNotFoundError:
+        pdb_path = None                       # fine if the topology is annotated
     top          = pt.load_topology(str(top_path))
     top_atoms    = list(top.atoms)
     top_residues = list(top.residues)
-    chain_map    = _build_chain_map(pdb_path, top)
+    chain_map    = _build_chain_map(top_path, pdb_path)
 
     # Collect unique sequence specs and substrate resids from both dist and RDF specs
     seen_seq:        set  = set()
@@ -790,7 +789,7 @@ def analyse(
         )
 
     print(f"  Topology : {top_path.name}")
-    print(f"  PDB      : {pdb_path.name}")
+    print(f"  PDB      : {pdb_path.name if pdb_path else '(not needed, annotated topology)'}")
     print(f"  Chains   : {chains}")
     if substrate_chain_map:
         for ch, mapping in substrate_chain_map.items():

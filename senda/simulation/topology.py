@@ -53,14 +53,18 @@ def topology_info(
         for mut in mutants:
             parm7 = simulations_dir / inh / mut / "replica_1" / "00_prep" / "structure.parm7"
             label = f"{inh}/{mut}"
-            rows.append((label, _read_parm7(parm7) if parm7.exists() else None))
+            info = _read_parm7(parm7) if parm7.exists() else None
+            if info is not None:
+                from .residue_ids import read_parm7_residues
+                info["ids"] = "yes" if read_parm7_residues(parm7)["ids"] is not None else "no"
+            rows.append((label, info))
 
     sys_w = max(max(len(r[0]) for r in rows), len("System"))
 
     header = (
         f"  {'System':<{sys_w}}  {'Atoms':>8}  "
         f"{'Box X (A)':>9}  {'Box Y (A)':>9}  {'Box Z (A)':>9}  "
-        f"{'Waters':>7}  {'Na+':>4}  {'Cl-':>4}  {'Solute Q':>8}"
+        f"{'Waters':>7}  {'Na+':>4}  {'Cl-':>4}  {'Solute Q':>8}  {'IDs':>3}"
     )
     print(header)
     print("  " + "-" * (len(header) - 2))
@@ -71,7 +75,7 @@ def topology_info(
             print(
                 f"  {label:<{sys_w}}  {dash:>8}  "
                 f"{dash:>9}  {dash:>9}  {dash:>9}  "
-                f"{dash:>7}  {dash:>4}  {dash:>4}  {dash:>8}"
+                f"{dash:>7}  {dash:>4}  {dash:>4}  {dash:>8}  {dash:>3}"
             )
             continue
 
@@ -82,5 +86,5 @@ def topology_info(
         print(
             f"  {label:<{sys_w}}  {info['atoms']:>8,}  "
             f"{box_x:>9}  {box_y:>9}  {box_z:>9}  "
-            f"{info['waters']:>7,}  {info['na']:>4}  {info['cl']:>4}  {info['solute_q']:>+8}"
+            f"{info['waters']:>7,}  {info['na']:>4}  {info['cl']:>4}  {info['solute_q']:>+8}  {info['ids']:>3}"
         )

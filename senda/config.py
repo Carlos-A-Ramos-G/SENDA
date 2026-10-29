@@ -163,15 +163,26 @@ def resolve_chains(cfg: dict, pdb_path=None) -> list:
 
 
 def system_chains(cfg: dict, cwd, inh: str, mut: str) -> list:
-    """resolve_chains() for one simulated system, reading its complex PDB if needed."""
+    """
+    resolve_chains() for one simulated system: config, else the protein chains
+    stored in its topology (annotated), else those of its complex PDB.
+    """
     from pathlib import Path
 
     if (cfg.get("michaelis_complex") or {}).get("chains"):
         return resolve_chains(cfg)
     cwd = Path(cwd)
+    prep = cwd / "simulations" / inh / mut / "replica_1" / "00_prep"
+    if (prep / "structure.parm7").exists():
+        from senda.simulation.residue_ids import chains_from_ids, read_parm7_residues
+        top = read_parm7_residues(prep / "structure.parm7")
+        if top["ids"] is not None:
+            found = chains_from_ids(top["ids"], top["labels"])
+            if found:
+                return found
     protein_dir = cwd / (cfg.get("michaelis_complex") or {}).get("output_dir", "protein")
     try:
-        pdb = find_complex_pdb([cwd / "simulations" / inh / mut / "replica_1" / "00_prep", protein_dir], mut, inh)
+        pdb = find_complex_pdb([prep, protein_dir], mut, inh)
     except FileNotFoundError:
         pdb = None
     return resolve_chains(cfg, pdb)

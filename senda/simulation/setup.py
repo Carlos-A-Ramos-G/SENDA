@@ -718,6 +718,9 @@ def setup_replica(
     if stem is not None:
         # Validated topology built elsewhere: copied as is, no tleap
         src_pdb = _copy_prebuilt(stem, replica_dir / "00_prep", inh, mut)
+        # residue IDs checked (count, names, positions) and stored in the topology
+        from .residue_ids import annotate_prep
+        annotate_prep(replica_dir / "00_prep", src_pdb)
     else:
         # PDB -copy directly from protein/ (already clean from senda-complex)
         src_pdb = find_complex_pdb([protein_dir], mut, inh)

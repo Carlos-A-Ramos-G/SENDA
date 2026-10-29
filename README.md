@@ -231,6 +231,23 @@ senda-sim --config config.yaml setup --mode local
 senda-sim --config config.yaml submit
 ```
 
+### Residue identity (PDB chain and number in the topology)
+
+Configs name residues by PDB chain and residue number (`sequence: 37`), but tleap numbers residues 1..N and drops chain IDs. SENDA bridges the two by pairing the non-solvent residues of the complex PDB with the topology, in order, and checking each pair three ways:
+
+- **count** -- the same number of non-solvent residues
+- **name** -- the same residue name, protonation variants allowed (HIS/HID/HIE/HIP, CYS/CYX/CYM, ASP/ASH, GLU/GLH, LYS/LYN). The topology decides the protonation; residues that differ only in protonation are listed in a note (e.g. `A/HIS 37 -> HIP`), so a state edited after the PDB was written is easy to spot.
+- **position** -- one heavy atom per residue (CA, else the first heavy atom both share) in the same place in the PDB and in `structure.rst7`, after removing the overall shift and periodic images (tolerance 0.5 A). This catches same-named residues in a different order, e.g. two copies of a ligand.
+
+```bash
+# store the checked mapping in every replica's 00_prep topology
+senda-sim --config config.yaml annotate
+```
+
+The mapping is written as the standard `%FLAG RESIDUE_NUMBER` / `RESIDUE_CHAINID` sections (added to the file; nothing else changes). ParmEd, cpptraj, pytraj and VMD then show the PDB numbering and chains; OpenMM and AMBER ignore the flags. Water and ions get chain `_`. Prebuilt topologies are annotated at setup.
+
+`senda-analyse` and `senda-qmmm` read the stored mapping and no longer need the PDB. For a topology that isn't annotated they do the same checked pairing in memory, without changing the file. A failed check stops with the first mismatching residue, e.g. `residue name mismatch at topology residue 312: PDB B/HIS 37 vs topology COF -- wrong PDB or residue order`.
+
 ### Check simulation status
 
 ```bash
@@ -292,6 +309,7 @@ amber_simulator:
 - `00_prep` receives `structure.parm7`, `structure.rst7` and `{mutant}_{inhibitor}_complex.pdb`.
 - Ligand libraries, `extra_libs` and tleap are skipped. HMR, the positional-restraint mask and the NMR restrainer run as usual.
 - Setup stops if a file is missing or if the prmtop and inpcrd atom counts differ.
+- Setup stores the PDB chain IDs and residue numbers in the copied topology (see [Residue identity](#residue-identity-pdb-chain-and-number-in-the-topology)) and stops if the PDB and topology don't match.
 
 ### Ion placement -- SPLIT method
 
@@ -449,7 +467,7 @@ For `sequence` atoms the equivalent residue in every other chain is looked up di
 
 For `substrate_sequence` atoms the equivalent residue in every other chain is determined by **geometric proximity**: the candidate non-solvent residue whose atoms are closest to the declared `sequence` reference atoms (resolved to that chain) is selected. This is necessary because ligands may share a PDB residue number with a protein residue (making direct lookup ambiguous) and because a peptide substrate uses standard amino-acid names that cannot be distinguished by name alone.
 
-To find the correct AMBER resid for your ligand/substrate in `chains[0]`, inspect the parm7 topology with `parmed` or `pytraj`.
+To find the correct AMBER resid for your ligand/substrate in `chains[0]`, inspect the parm7 topology with `parmed` or `pytraj`. The chain map comes from the residue IDs stored in the topology (`senda-sim annotate`), or from the checked pairing with the complex PDB if the topology isn't annotated (see [Residue identity](#residue-identity-pdb-chain-and-number-in-the-topology)).
 
 ### Water RDF
 
