@@ -151,7 +151,7 @@ Everything else in the config (`amber_simulator:`, `analysis:`, `qmmm:`, etc.) i
 For each structure in `michaelis_complex.structures` whose mutant name appears in the top-level `mutants:` list (or all structures if `mutants:` is absent or empty):
 
 1. **Clean** -- strips CONECT/END records and unwanted HETATM residues; keeps only the specified chains; applies `residue_renames`; copies protonation states (HID/HIE/HIP, CYM, ASH, GLH, etc.) from the reference enzyme PDB, skipping any positions that are mutated.
-2. **Align** -- superimposes the cleaned structure onto the alignment reference by Ca RMSD (Kabsch). ANISOU records are carried through.
+2. **Align** -- superimposes the cleaned structure onto the alignment reference by Ca RMSD (Kabsch), using the CA atoms of amino-acid residues in the alignment chains (`align_chains`, default: the first chain) and, optionally, only residues `align_residues: [first, last]`. Aligning on one chain keeps a multimer whose other chains are packed differently from the reference from being misaligned. ANISOU records are carried through.
 3. **Fill missing residues** -- residues present in the alignment reference but absent in the raw PDB are copied from the reference (valid because the structure has already been superimposed).
 4. **Write output PDBs** -- one per inhibitor listed in `inhibitor_sources`, plus an APO (protein-only) file:
    - `{mutant}_{inhibitor}_complex.pdb` -- protein + ligand
@@ -730,6 +730,8 @@ michaelis_complex:
   raw_pdbs_dir: raw_pdbs/
   output_dir: protein/
   chains: [A, B]          # optional; default: every protein chain of the alignment reference
+  align_chains: [A]       # optional; chains whose CA atoms define the superposition (default: the first chain)
+  align_residues: [1, 301] # optional; residue-number window for the fit (default: all residues)
 
   # Rename residues before any other processing (e.g. numeric ligand codes).
   residue_renames:

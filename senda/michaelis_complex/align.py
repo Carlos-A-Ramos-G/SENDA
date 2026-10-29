@@ -10,23 +10,27 @@ unchanged (they are stripped by the simulation launcher anyway).
 
 from __future__ import annotations
 
+from senda.config import AMINO_ACIDS
+
 
 # ---------------------------------------------------------------------------
 # Cα extraction
 # ---------------------------------------------------------------------------
 
 def _parse_ca(
-    lines:      list[str],
-    chains:     tuple[str, ...] = ("A",),
-    max_resnum: int | None      = 301,
+    lines:         list[str],
+    chains:        tuple[str, ...]        = ("A",),
+    resnum_range:  tuple[int, int] | None = None,
 ) -> tuple[list[tuple[str, int]], list[list[float]]]:
     """
-    Return (keys, coords) for CA atoms in *chains* up to *max_resnum*.
-    key = (chain_id, resnum)
+    Return (keys, coords) for the CA atoms of amino-acid residues in *chains*
+    (optionally only residue numbers within *resnum_range*, inclusive).
+    key = (chain_id, resnum); a blank chain ID counts as A.
 
-    Defaults to chain A, residues 1–301 so that tetrameric crystal structures
-    (e.g. G143S with chains A–D) are not misaligned by a chain B that is in a
-    completely different orientation from the dimer-B in the reference.
+    Only amino-acid residues count, so a calcium ion or a ligand atom named
+    CA never enters the fit. Aligning on a single chain (the default chain)
+    keeps multimeric crystal structures from being misaligned by another
+    chain whose relative orientation differs from the reference.
     """
     keys:   list[tuple[str, int]] = []
     coords: list[list[float]]     = []
@@ -37,7 +41,9 @@ def _parse_ca(
         atom_name = line[12:16].strip()
         if atom_name != "CA":
             continue
-        chain = line[21]
+        if line[17:20].strip() not in AMINO_ACIDS:
+            continue
+        chain = line[21].strip() or "A"
         if chain not in chains:
             continue
         try:
@@ -47,7 +53,7 @@ def _parse_ca(
             z      = float(line[46:54])
         except ValueError:
             continue
-        if max_resnum is not None and resnum > max_resnum:
+        if resnum_range is not None and not (resnum_range[0] <= resnum <= resnum_range[1]):
             continue
         keys.append((chain, resnum))
         coords.append([x, y, z])
@@ -72,7 +78,8 @@ def _matched_arrays(
     if not mob_xyz:
         raise ValueError(
             "No shared Cα atoms found between mobile and reference structures. "
-            "Check that both files have protein chain A with residues 1–301."
+            "Check michaelis_complex.align_chains / align_residues: both files "
+            "need amino-acid CA atoms in those chains and residue numbers."
         )
 
     return mob_xyz, ref_xyz
@@ -85,6 +92,8 @@ def _matched_arrays(
 def compute_superposition(
     mobile_lines: list[str],
     ref_lines:    list[str],
+    chains:       tuple[str, ...]        = ("A",),
+    resnum_range: tuple[int, int] | None = None,
 ) -> tuple:
     """
     Compute (R, t, rms) such that  R @ mobile_coord + t ≈ ref_coord.
@@ -107,8 +116,8 @@ def compute_superposition(
             "Install with:  conda install -c conda-forge biopython numpy"
         ) from exc
 
-    mob_keys, mob_coords = _parse_ca(mobile_lines)
-    ref_keys, ref_coords = _parse_ca(ref_lines)
+    mob_keys, mob_coords = _parse_ca(mobile_lines, chains, resnum_range)
+    ref_keys, ref_coords = _parse_ca(ref_lines, chains, resnum_range)
 
     mob_xyz, ref_xyz = _matched_arrays(mob_keys, mob_coords, ref_keys, ref_coords)
 

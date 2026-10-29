@@ -212,6 +212,8 @@ def main() -> None:
             force=args.force,
             include_apo=include_apo,
             disulfides=disulfides,
+            align_chains=tuple(str(c) for c in mc["align_chains"]) if mc.get("align_chains") else None,
+            align_residues=tuple(int(r) for r in mc["align_residues"]) if mc.get("align_residues") else None,
         )
     except FileNotFoundError as exc:
         sys.exit(f"Error: {exc}")

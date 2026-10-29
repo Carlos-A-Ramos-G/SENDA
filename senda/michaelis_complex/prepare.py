@@ -237,6 +237,8 @@ def prepare(
     chains:            frozenset[str] = frozenset(("A", "B")),
     include_apo:       bool = True,
     disulfides:        list[tuple[str, int, str, int]] | None = None,
+    align_chains:      tuple[str, ...] | None = None,
+    align_residues:    tuple[int, int] | None = None,
 ) -> None:
     """
     Produce inhibitor complex and APO PDBs in *output_dir*.
@@ -254,6 +256,9 @@ def prepare(
     chains            : chain IDs to retain
     disulfides        : [(chain1, resnum1, chain2, resnum2), …] confirmed
                         disulfide pairs, renamed to CYX
+    align_chains      : chains whose CA atoms define the superposition
+                        (default: the first of *chains*)
+    align_residues    : (first, last) residue numbers used for it (default: all)
     """
     raw_lines = raw_pdb.read_text().splitlines(keepends=True)
 
@@ -261,7 +266,8 @@ def prepare(
     cleaned = clean(raw_lines, prot_map, residue_renames, chains, disulfides=disulfides)
 
     # 2. Align to reference frame
-    rot, tran, rms = compute_superposition(cleaned, alignment_ref)
+    align_chains = tuple(align_chains or sorted(chains)[:1])
+    rot, tran, rms = compute_superposition(cleaned, alignment_ref, align_chains, align_residues)
     log.info("[%s] Cα RMSD to reference: %.3f Å", mutant, rms)
     aligned = apply_transform(cleaned, rot, tran)
 
@@ -343,6 +349,8 @@ def prepare_all(
     force:                bool = False,
     include_apo:          bool = True,
     disulfides:           list[tuple[str, int, str, int]] | None = None,
+    align_chains:         tuple[str, ...] | None = None,
+    align_residues:       tuple[int, int] | None = None,
 ) -> None:
     """
     Run :func:`prepare` for each entry in *structures*.
@@ -405,5 +413,7 @@ def prepare_all(
             prot_map, residue_renames, chains,
             include_apo=include_apo,
             disulfides=disulfides,
+            align_chains=align_chains,
+            align_residues=align_residues,
         )
         print(f"[{mutant}] done → {output_dir}/")
